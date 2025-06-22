@@ -110,12 +110,13 @@ export class Helpers {
   }
 
   static slugify(text: string): string {
-    return text
-      .toLowerCase()
-      .replace(/[^w\s-]/g, '')
-      .replace(/[\s_-]+/g, '-')
-      .replace(/^-+|-+$/g, '');
-  }
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s-]/g, '')      // FIXED: Valid regex
+    .replace(/[\s_-]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 
   static capitalizeWords(str: string): string {
     return str.replace(/\b\w/g, l => l.toUpperCase());

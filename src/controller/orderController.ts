@@ -1,4 +1,3 @@
-// src/controllers/orderController.ts
 import { Request, Response } from 'express';
 import { validationResult } from 'express-validator';
 import { PrismaClient } from '@prisma/client';
@@ -21,7 +20,6 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     const { paymentMethod, shippingAddress } = req.body;
     const userId = req.user.id;
 
-    // Check if user has filled details if not provided in shipping address
     const user = await prisma.user.findUnique({
       where: { id: userId },
       include: { userDetails: true }
@@ -31,7 +29,6 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'User not found' });
     }
 
-    // Validate shipping address
     const requiredFields = ['name', 'phone', 'address', 'city', 'state', 'pincode'];
     for (const field of requiredFields) {
       if (!shippingAddress[field]) {
@@ -39,7 +36,6 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // Get cart items
     const cartItems = await prisma.cart.findMany({
       where: { userId },
       include: {
@@ -51,21 +47,18 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Cart is empty' });
     }
 
-    // Check stock availability
     for (const item of cartItems) {
       if (item.product.stock < item.quantity) {
-        return res.status(400).json({ 
-          error: `Insufficient stock for ${item.product.name}` 
+        return res.status(400).json({
+          error: `Insufficient stock for ${item.product.name}`
         });
       }
     }
 
-    // Calculate total amount
-    const totalAmount = cartItems.reduce((sum: number, item: { product: { price: number; }; quantity: number; }) => 
+    const totalAmount = cartItems.reduce((sum: number, item: { product: { price: number; }; quantity: number; }) =>
       sum + (item.product.price * item.quantity), 0
     );
 
-    // Create order
     const order = await prisma.order.create({
       data: {
         userId,
@@ -76,7 +69,6 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       }
     });
 
-    // Create order items
     const orderItems = await Promise.all(
       cartItems.map((item: { productId: any; quantity: any; product: { price: any; }; }) =>
         prisma.orderItem.create({
@@ -90,7 +82,6 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       )
     );
 
-    // Update product stock
     await Promise.all(
       cartItems.map((item: { productId: any; quantity: any; }) =>
         prisma.product.update({
@@ -100,12 +91,10 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       )
     );
 
-    // Clear cart
     await prisma.cart.deleteMany({
       where: { userId }
     });
 
-    // Get complete order details
     const completeOrder = await prisma.order.findUnique({
       where: { id: order.id },
       include: {
@@ -122,13 +111,16 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       }
     });
 
-    // Send emails
     try {
-      await sendOrderConfirmationEmail(completeOrder!);
-      await sendOrderNotificationToAdmin(completeOrder!);
+      await emailService.sendOrderConfirmation(
+        completeOrder!.user.userDetails?.email ?? 'admin@yourdomain.com',
+        completeOrder!.user.name || completeOrder!.user.username,
+        completeOrder!.id,
+        completeOrder!.totalAmount
+      );
+      await emailService.sendAdminOrderNotification(completeOrder!);
     } catch (emailError) {
       console.error('Email sending error:', emailError);
-      // Don't fail the order creation if email fails
     }
 
     res.status(201).json({
@@ -213,7 +205,6 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    // Check if user owns the order or is admin
     if (order.userId !== userId && !isAdmin) {
       return res.status(403).json({ error: 'Access denied' });
     }
@@ -227,29 +218,28 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
 
 export const getAllOrders = async (req: Request, res: Response) => {
   try {
-    const { 
-      page = 1, 
-      limit = 10, 
-      status, 
+    const {
+      page = 1,
+      limit = 10,
+      status,
       paymentStatus,
       startDate,
-      endDate 
+      endDate
     } = req.query;
 
     const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
     const take = parseInt(limit as string);
 
-    // Build where clause
     const where: any = {};
-    
+
     if (status) {
       where.deliveryStatus = status;
     }
-    
+
     if (paymentStatus) {
       where.paymentStatus = paymentStatus;
     }
-    
+
     if (startDate || endDate) {
       where.createdAt = {};
       if (startDate) where.createdAt.gte = new Date(startDate as string);
@@ -350,12 +340,15 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
 
   try {
     const { orderId } = req.body;
-    const userId      = req.user!.id;
+    const userId = req.user!.id;
 
-    // 1) Fetch your order
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      include: { user: true },
+      include: { 
+        user: {
+          include: { userDetails: true }
+        }
+      }
     });
 
     if (!order || order.userId !== userId) {
@@ -366,23 +359,22 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Payment already processed' });
     }
 
-    // 2) Call your service
     const paymentResponse = await paymentService.initiatePayment({
       merchantTransactionId: orderId,
-      merchantUserId:        userId,
-      amount:                order.totalAmount,
-      callbackUrl:           `${process.env.APP_URL}/api/payments/callback`,
-      mobileNumber:          order.user.userDetails?.phone,
+      merchantUserId: userId,
+      amount: order.totalAmount,
+      callbackUrl: `${process.env.APP_URL}/api/payments/callback`,
+      mobileNumber: order.user.userDetails?.phone ?? undefined,
+
     });
 
     if (!paymentResponse.success) {
       return res.status(502).json({ error: paymentResponse.error });
     }
 
-    // 3) Return the redirect URL to the client
     res.json({
-      message:     'Payment initiated',
-      paymentUrl:  paymentResponse.paymentUrl!,
+      message: 'Payment initiated',
+      paymentUrl: paymentResponse.paymentUrl!,
       transactionId: paymentResponse.transactionId!,
     });
   } catch (err) {
@@ -391,9 +383,6 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
   }
 };
 
-/**
- * Verify PhonePe callback (or manual verify).
- */
 export const verifyPayment = async (req: AuthRequest, res: Response) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
@@ -403,30 +392,32 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
   try {
     const { transactionId } = req.body;
 
-    // 1) Ask PhonePe for final status
     const statusResult = await paymentService.checkPaymentStatus(transactionId);
 
     if (!statusResult.success || statusResult.status !== 'SUCCESS') {
       return res.status(400).json({ error: 'Payment not successful', status: statusResult.status });
     }
 
-    // 2) Mark your order as paid
     const order = await prisma.order.update({
       where: { id: transactionId },
       data: {
         paymentStatus: 'PAID',
-        paymentId:     transactionId,
+        paymentId: transactionId,
       },
       include: {
         orderItems: { include: { product: true } },
-        user:       { include: { userDetails: true } }
+        user: { include: { userDetails: true } }
       }
     });
 
-    // 3) Send confirmation emails
     try {
-      await sendOrderConfirmationEmail(order);
-      await sendOrderNotificationToAdmin(order);
+      await emailService.sendOrderConfirmation(
+        order.user.userDetails?.email ?? 'admin@yourdomain.com',
+        order.user.name || order.user.username,
+        order.id,
+        order.totalAmount
+      );
+      await emailService.sendAdminOrderNotification(order);
     } catch (emailErr) {
       console.error('Email error on payment verify:', emailErr);
     }

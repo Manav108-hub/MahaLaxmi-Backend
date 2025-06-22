@@ -11,9 +11,9 @@ export interface OrderWithUserAndItems {
     name: string;
     username: string;
     userDetails?: {
-      email?: string;
-      phone?: string;
-    };
+      email?: string | null;
+      phone?: string | null;
+    } | null;
   };
   orderItems: Array<{
     quantity: number;
@@ -42,7 +42,6 @@ export class EmailService {
     return EmailService.instance;
   }
 
-  /** Low-level email send */
   public async sendEmail(options: EmailOptions): Promise<boolean> {
     try {
       const { data, error } = await resend.emails.send({
@@ -63,7 +62,6 @@ export class EmailService {
     }
   }
 
-  /** Welcome email */
   public async sendWelcomeEmail(email: string, name: string): Promise<boolean> {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -79,7 +77,6 @@ export class EmailService {
     return this.sendEmail({ to: email, subject: 'Welcome to Our Store!', html });
   }
 
-  /** Order confirmation email to customer */
   public async sendOrderConfirmation(
     email: string,
     name: string,
@@ -107,7 +104,6 @@ export class EmailService {
     });
   }
 
-  /** Admin notification on new order */
   public async sendAdminOrderNotification(order: OrderWithUserAndItems): Promise<boolean> {
     const adminEmail = process.env.ADMIN_EMAIL || 'admin@yourdomain.com';
     const orderItemsHtml = order.orderItems

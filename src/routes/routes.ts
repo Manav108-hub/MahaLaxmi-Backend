@@ -93,9 +93,10 @@ router.post('/category', [
 router.get('/categories', asyncHandler(getCategories));
 
 // Product Routes
-router.post('/product', 
-  middlewareHandler(adminAuth),
-  upload.array('images', 5),
+router.post(
+  '/product',
+  middlewareHandler(adminAuth),                     // Auth first
+  upload.array('images', 5),                        // Then file upload
   [
     body('name').trim().isLength({ min: 2 }).withMessage('Product name must be at least 2 characters'),
     body('description').optional().trim(),
@@ -103,15 +104,23 @@ router.post('/product',
     body('stock').isInt({ min: 0 }).withMessage('Stock must be a non-negative integer'),
     body('categoryId').notEmpty().withMessage('Category ID is required')
   ],
-  asyncHandler(createProduct)
+  asyncHandler(createProduct)                       // Then logic
 );
 
 router.get('/products', asyncHandler(getProducts));
 router.get('/product/:id', asyncHandler(getProductById));
 
-router.put('/product/:id',
+router.put(
+  '/product/:id',
   middlewareHandler(adminAuth),
   upload.array('images', 5),
+  [
+    body('name').optional().trim(),
+    body('description').optional().trim(),
+    body('price').optional().isFloat({ min: 0 }),
+    body('stock').optional().isInt({ min: 0 }),
+    body('categoryId').optional().notEmpty()
+  ],
   asyncHandler(updateProduct)
 );
 
