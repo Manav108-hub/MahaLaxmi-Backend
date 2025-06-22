@@ -1,26 +1,26 @@
 // services/emailService.ts
 import { Resend } from 'resend';
-import { PrismaClient, Prisma } from '@prisma/client'; // Import Prisma for types
 
 const resend = new Resend(process.env.RESEND_API_KEY!);
 
-// Define a type for the Order with its included relations
-// This type should match how you're querying the order in your controller
-type OrderWithUserAndItems = Prisma.OrderGetPayload<{
-  include: {
-    user: {
-      include: {
-        userDetails: true;
-      };
-    };
-    orderItems: {
-      include: {
-        product: true;
-      };
+// Manual type definition since Prisma's Order type isn't available with Mongo
+export interface OrderWithUserAndItems {
+  id: string;
+  totalAmount: number;
+  user: {
+    name: string;
+    username: string;
+    userDetails?: {
+      email?: string;
+      phone?: string;
     };
   };
-}>;
-
+  orderItems: Array<{
+    quantity: number;
+    price: number;
+    product: { name: string };
+  }>;
+}
 
 export interface EmailOptions {
   to: string | string[];
@@ -80,7 +80,12 @@ export class EmailService {
   }
 
   /** Order confirmation email to customer */
-  public async sendOrderConfirmation(email: string, name: string, orderId: string, totalAmount: number): Promise<boolean> {
+  public async sendOrderConfirmation(
+    email: string,
+    name: string,
+    orderId: string,
+    totalAmount: number
+  ): Promise<boolean> {
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>Order Confirmation</h2>
@@ -98,34 +103,16 @@ export class EmailService {
     return this.sendEmail({
       to: email,
       subject: `Order Confirmation - ${orderId}`,
-      html
+      html,
     });
-  }
-
-  /** Password reset email */
-  public async sendPasswordReset(email: string, resetToken: string): Promise<boolean> {
-    const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-        <h2>Password Reset Request</h2>
-        <p>You requested a password reset. Click the button below to reset your password:</p>
-        <div style="margin: 20px 0;">
-          <a href="${resetUrl}" style="background-color: #dc3545; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">Reset Password</a>
-        </div>
-        <p>This link will expire in 1 hour.</p>
-        <p>If you didn't request this, please ignore this email.</p>
-        <p>Best regards,<br/>Your Store Team</p>
-      </div>
-    `;
-    return this.sendEmail({ to: email, subject: 'Password Reset Request', html });
   }
 
   /** Admin notification on new order */
   public async sendAdminOrderNotification(order: OrderWithUserAndItems): Promise<boolean> {
     const adminEmail = process.env.ADMIN_EMAIL || 'admin@yourdomain.com';
-    const orderItemsHtml = order.orderItems.map(item => `
-      <li>${item.product.name} (x${item.quantity}) - ₹${item.price.toFixed(2)}</li>
-    `).join('');
+    const orderItemsHtml = order.orderItems
+      .map(item => `<li>${item.product.name} (x${item.quantity}) - ₹${item.price.toFixed(2)}</li>`)
+      .join('');
     const html = `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
         <h2>New Order Notification (Admin)</h2>
@@ -134,17 +121,11 @@ export class EmailService {
           <h3>Order Details:</h3>
           <p><strong>Order ID:</strong> ${order.id}</p>
           <p><strong>Total Amount:</strong> ₹${order.totalAmount.toFixed(2)}</p>
-          <p><strong>Payment Method:</strong> ${order.paymentMethod}</p>
-          <p><strong>Payment Status:</strong> ${order.paymentStatus}</p>
           <h4>Customer Information:</h4>
-          <p><strong>Name:</strong> ${order.user.name || order.user.username}</p>
-          <p><strong>Email:</strong> ${order.user.email}</p>
-          <p><strong>Phone:</strong> ${order.user.userDetails?.phone || 'N/A'}</p>
-          <h4>Shipping Address:</h4>
-          <p>${order.shippingAddress.name}</p>
-          <p>${order.shippingAddress.address}</p>
-          <p>${order.shippingAddress.city}, ${order.shippingAddress.state} - ${order.shippingAddress.pincode}</p>
-          <p><strong>Phone:</strong> ${order.shippingAddress.phone}</p>
+          <p><strong>Name:</strong> ${order.user.name}</p>
+          <p><strong>Username:</strong> ${order.user.username}</p>
+          <p><strong>Email:</strong> ${order.user.userDetails?.email ?? 'N/A'}</p>
+          <p><strong>Phone:</strong> ${order.user.userDetails?.phone ?? 'N/A'}</p>
           <h4>Items:</h4>
           <ul>${orderItemsHtml}</ul>
         </div>
@@ -152,11 +133,7 @@ export class EmailService {
         <p>Best regards,<br/>Your Store Admin</p>
       </div>
     `;
-    return this.sendEmail({
-      to: adminEmail,
-      subject: `New Order #${order.id} - ${order.user.name || order.user.username}`, // Use username if name is null
-      html
-    });
+    return this.sendEmail({ to: adminEmail, subject: `New Order #${order.id} Notification`, html });
   }
 }
 
