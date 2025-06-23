@@ -2,7 +2,7 @@ import { Request, Response } from 'express';
 import { validationResult } from 'express-validator';
 import { PrismaClient } from '@prisma/client';
 import { emailService } from '../services/emailService';
-import { paymentService  } from '../services/paymentService';
+import { mockPaymentService } from '../services/paymentService';
 
 const prisma = new PrismaClient();
 
@@ -164,8 +164,22 @@ export const getUserOrders = async (req: AuthRequest, res: Response) => {
       prisma.order.count({ where: { userId } })
     ]);
 
+    // Fetch payments separately if needed
+    const ordersWithPayments = await Promise.all(
+      orders.map(async (order) => {
+        const latestPayment = await prisma.payment.findFirst({
+          where: { orderId: order.id },
+          orderBy: { createdAt: 'desc' }
+        });
+        return {
+          ...order,
+          latestPayment
+        };
+      })
+    );
+
     res.json({
-      orders,
+      orders: ordersWithPayments,
       pagination: {
         page: parseInt(page as string),
         limit: take,
@@ -209,7 +223,18 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    res.json({ order });
+    // Fetch payments separately
+    const payments = await prisma.payment.findMany({
+      where: { orderId: id },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json({ 
+      order: {
+        ...order,
+        payments
+      }
+    });
   } catch (error) {
     console.error('Get order by ID error:', error);
     res.status(500).json({ error: 'Internal server error' });
@@ -276,8 +301,22 @@ export const getAllOrders = async (req: Request, res: Response) => {
       prisma.order.count({ where })
     ]);
 
+    // Fetch latest payment for each order
+    const ordersWithPayments = await Promise.all(
+      orders.map(async (order) => {
+        const latestPayment = await prisma.payment.findFirst({
+          where: { orderId: order.id },
+          orderBy: { createdAt: 'desc' }
+        });
+        return {
+          ...order,
+          latestPayment
+        };
+      })
+    );
+
     res.json({
-      orders,
+      orders: ordersWithPayments,
       pagination: {
         page: parseInt(page as string),
         limit: take,
@@ -322,9 +361,18 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       }
     });
 
+    // Fetch payments separately
+    const payments = await prisma.payment.findMany({
+      where: { orderId: id },
+      orderBy: { createdAt: 'desc' }
+    });
+
     res.json({
       message: 'Order status updated successfully',
-      order
+      order: {
+        ...order,
+        payments
+      }
     });
   } catch (error) {
     console.error('Update order status error:', error);
@@ -333,12 +381,12 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
 };
 
 export const initiatePayment = async (req: AuthRequest, res: Response) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
+    }
+
     const { orderId } = req.body;
     const userId = req.user!.id;
 
@@ -359,23 +407,62 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'Payment already processed' });
     }
 
-    const paymentResponse = await paymentService.initiatePayment({
-      merchantTransactionId: orderId,
-      merchantUserId: userId,
-      amount: order.totalAmount,
-      callbackUrl: `${process.env.APP_URL}/api/payments/callback`,
-      mobileNumber: order.user.userDetails?.phone ?? undefined,
+    if (order.paymentMethod !== 'ONLINE') {
+      return res.status(400).json({ error: 'This order does not require online payment' });
+    }
 
+    // Check if there's already a pending payment for this order
+    const existingPayment = await prisma.payment.findFirst({
+      where: {
+        orderId: orderId,
+        status: 'PENDING'
+      }
+    });
+
+    if (existingPayment) {
+      // Return existing payment details
+      return res.json({
+        message: 'Payment already initiated',
+        paymentUrl: existingPayment.paymentUrl!,
+        transactionId: existingPayment.transactionId,
+        paymentId: existingPayment.id
+      });
+    }
+
+    const callbackUrl = `${process.env.APP_URL || 'http://localhost:3000'}/payment/callback`;
+
+    const paymentResponse = await mockPaymentService.initiatePayment({
+      merchantTransactionId: orderId,
+      merchantUserId: userId.toString(),
+      amount: order.totalAmount,
+      callbackUrl: callbackUrl,
+      mobileNumber: order.user.userDetails?.phone ?? undefined,
     });
 
     if (!paymentResponse.success) {
-      return res.status(502).json({ error: paymentResponse.error });
+      return res.status(502).json({ error: paymentResponse.error || 'Payment initiation failed' });
     }
 
+    // Create payment record in database
+    const payment = await prisma.payment.create({
+      data: {
+        orderId: orderId,
+        userId: userId,
+        transactionId: paymentResponse.transactionId!,
+        merchantTransactionId: orderId,
+        amount: order.totalAmount,
+        status: 'PENDING',
+        paymentUrl: paymentResponse.paymentUrl!,
+        callbackUrl: callbackUrl,
+        mobileNumber: order.user.userDetails?.phone ?? undefined
+      }
+    });
+
     res.json({
-      message: 'Payment initiated',
+      message: 'Payment initiated successfully',
       paymentUrl: paymentResponse.paymentUrl!,
       transactionId: paymentResponse.transactionId!,
+      paymentId: payment.id
     });
   } catch (err) {
     console.error('Initiate payment error:', err);
@@ -384,50 +471,159 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
 };
 
 export const verifyPayment = async (req: AuthRequest, res: Response) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({ errors: errors.array() });
-  }
-
   try {
-    const { transactionId } = req.body;
-
-    const statusResult = await paymentService.checkPaymentStatus(transactionId);
-
-    if (!statusResult.success || statusResult.status !== 'SUCCESS') {
-      return res.status(400).json({ error: 'Payment not successful', status: statusResult.status });
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ errors: errors.array() });
     }
 
-    const order = await prisma.order.update({
-      where: { id: transactionId },
-      data: {
-        paymentStatus: 'PAID',
-        paymentId: transactionId,
-      },
+    const { transactionId } = req.body;
+    const userId = req.user!.id;
+
+    // Find payment record
+    const payment = await prisma.payment.findUnique({
+      where: { transactionId: transactionId },
       include: {
-        orderItems: { include: { product: true } },
-        user: { include: { userDetails: true } }
+        order: {
+          include: {
+            user: { include: { userDetails: true } },
+            orderItems: { include: { product: true } }
+          }
+        }
       }
     });
 
-    try {
-      await emailService.sendOrderConfirmation(
-        order.user.userDetails?.email ?? 'admin@yourdomain.com',
-        order.user.name || order.user.username,
-        order.id,
-        order.totalAmount
-      );
-      await emailService.sendAdminOrderNotification(order);
-    } catch (emailErr) {
-      console.error('Email error on payment verify:', emailErr);
+    if (!payment) {
+      return res.status(404).json({ error: 'Payment not found' });
     }
 
+    if (payment.userId !== userId) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Check payment status with mock service
+    const statusResult = await mockPaymentService.checkPaymentStatus(transactionId);
+
+    if (!statusResult.success) {
+      return res.status(400).json({ 
+        error: 'Unable to verify payment status', 
+        status: statusResult.status 
+      });
+    }
+
+    // Update payment record
+    const updatedPayment = await prisma.payment.update({
+      where: { id: payment.id },
+      data: {
+        status: statusResult.status as any,
+        completedAt: statusResult.status === 'SUCCESS' ? new Date() : null,
+        gatewayResponse: {
+          paymentMethod: statusResult.paymentMethod,
+          verifiedAt: new Date().toISOString(),
+          amount: statusResult.amount
+        }
+      }
+    });
+
+    let updatedOrder = payment.order;
+
+    // Update order status if payment successful
+    if (statusResult.status === 'SUCCESS') {
+      updatedOrder = await prisma.order.update({
+        where: { id: payment.orderId },
+        data: {
+          paymentStatus: 'PAID',
+          paymentId: transactionId,
+        },
+        include: {
+          orderItems: { include: { product: true } },
+          user: { include: { userDetails: true } }
+        }
+      });
+
+      // Send confirmation emails
+      try {
+        await emailService.sendOrderConfirmation(
+          updatedOrder.user.userDetails?.email ?? 'admin@yourdomain.com',
+          updatedOrder.user.name || updatedOrder.user.username,
+          updatedOrder.id,
+          updatedOrder.totalAmount
+        );
+        await emailService.sendAdminOrderNotification(updatedOrder);
+      } catch (emailErr) {
+        console.error('Email error on payment verify:', emailErr);
+      }
+    } else if (statusResult.status === 'FAILURE') {
+      updatedOrder = await prisma.order.update({
+        where: { id: payment.orderId },
+        data: {
+          paymentStatus: 'FAILED'
+        },
+        include: {
+          orderItems: { include: { product: true } },
+          user: { include: { userDetails: true } }
+        }
+      });
+    }
+
+    // Fetch all payments for this order
+    const allPayments = await prisma.payment.findMany({
+      where: { orderId: payment.orderId },
+      orderBy: { createdAt: 'desc' }
+    });
+
     res.json({
-      message: 'Payment verified and order updated',
-      order,
+      message: `Payment ${statusResult.status.toLowerCase()}`,
+      paymentStatus: statusResult.status,
+      order: {
+        ...updatedOrder,
+        payments: allPayments
+      },
+      payment: updatedPayment
     });
   } catch (err) {
     console.error('Verify payment error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+// Get payment details for an order
+export const getPaymentDetails = async (req: AuthRequest, res: Response) => {
+  try {
+    const { orderId } = req.params;
+    const userId = req.user.id;
+    const isAdmin = req.user.isAdmin;
+
+    const payments = await prisma.payment.findMany({
+      where: { orderId },
+      include: {
+        order: {
+          select: {
+            id: true,
+            userId: true,
+            totalAmount: true
+          }
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    if (payments.length === 0) {
+      return res.status(404).json({ error: 'No payments found for this order' });
+    }
+
+    // Check access permissions
+    const order = payments[0].order;
+    if (order.userId !== userId && !isAdmin) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+
+    res.json({
+      success: true,
+      payments
+    });
+  } catch (error) {
+    console.error('Get payment details error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };

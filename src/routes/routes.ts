@@ -24,11 +24,13 @@ import {
   getAllOrders,
   updateOrderStatus,
   initiatePayment,
-  verifyPayment
+  verifyPayment,
+  getPaymentDetails
 } from '../controller/orderController';
 import { auth } from '../middleware/auth';
 import { adminAuth } from '../middleware/admin';
 import { upload } from '../config/s3';
+import { mockPaymentService } from '../services/paymentService';
 
 const router = express.Router();
 
@@ -95,8 +97,8 @@ router.get('/categories', asyncHandler(getCategories));
 // Product Routes
 router.post(
   '/product',
-  middlewareHandler(adminAuth),                     // Auth first
-  upload.array('images', 5),                        // Then file upload
+  middlewareHandler(adminAuth),
+  upload.array('images', 5),
   [
     body('name').trim().isLength({ min: 2 }).withMessage('Product name must be at least 2 characters'),
     body('description').optional().trim(),
@@ -104,7 +106,7 @@ router.post(
     body('stock').isInt({ min: 0 }).withMessage('Stock must be a non-negative integer'),
     body('categoryId').notEmpty().withMessage('Category ID is required')
   ],
-  asyncHandler(createProduct)                       // Then logic
+  asyncHandler(createProduct)
 );
 
 router.get('/products', asyncHandler(getProducts));
@@ -150,6 +152,19 @@ router.post('/order', [
 router.get('/orders', middlewareHandler(auth), asyncHandler(getUserOrders));
 router.get('/order/:id', middlewareHandler(auth), asyncHandler(getOrderById));
 
+// Payment Routes for Orders
+router.post('/order/payment/initiate', [
+  middlewareHandler(auth),
+  body('orderId').notEmpty().withMessage('Order ID is required')
+], asyncHandler(initiatePayment));
+
+router.post('/order/payment/verify', [
+  middlewareHandler(auth),
+  body('transactionId').notEmpty().withMessage('Transaction ID is required')
+], asyncHandler(verifyPayment));
+
+router.get('/order/:orderId/payments', middlewareHandler(auth), asyncHandler(getPaymentDetails));
+
 // Admin Order Routes
 router.get('/admin/orders', middlewareHandler(adminAuth), asyncHandler(getAllOrders));
 
@@ -159,8 +174,187 @@ router.put('/admin/order/:id/status', [
   body('paymentStatus').optional().isIn(['PENDING', 'PAID', 'FAILED', 'REFUNDED'])
 ], asyncHandler(updateOrderStatus));
 
-// Payment Routes
-router.post('/payment/initiate', middlewareHandler(auth), asyncHandler(initiatePayment));
-router.post('/payment/verify', middlewareHandler(auth), asyncHandler(verifyPayment));
+// Mock Payment Routes
+router.post('/payment/initiate', [
+  middlewareHandler(auth),
+  body('orderId').notEmpty().withMessage('Order ID is required'),
+  body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
+  body('callbackUrl').isURL().withMessage('Valid callback URL is required'),
+  body('mobileNumber').optional().isMobilePhone('en-IN').withMessage('Invalid mobile number')
+], asyncHandler(async (req: Request, res: Response) => {
+  const { orderId, amount, callbackUrl, mobileNumber } = req.body;
+  const userId = (req as any).user.id;
+
+  try {
+    const paymentRequest = {
+      merchantTransactionId: orderId,
+      merchantUserId: userId.toString(),
+      amount: parseFloat(amount),
+      callbackUrl,
+      mobileNumber
+    };
+
+    const paymentResponse = await mockPaymentService.initiatePayment(paymentRequest);
+
+    if (paymentResponse.success) {
+      res.status(200).json({
+        success: true,
+        message: 'Payment initiated successfully',
+        data: {
+          paymentUrl: paymentResponse.paymentUrl,
+          transactionId: paymentResponse.transactionId
+        }
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        message: paymentResponse.error || 'Payment initiation failed'
+      });
+    }
+  } catch (error) {
+    console.error('Payment initiation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+}));
+
+router.get('/payment/status/:transactionId', middlewareHandler(auth), asyncHandler(async (req: Request, res: Response) => {
+  const { transactionId } = req.params;
+
+  try {
+    const paymentStatus = await mockPaymentService.checkPaymentStatus(transactionId);
+
+    res.status(200).json({
+      success: true,
+      data: paymentStatus
+    });
+  } catch (error) {
+    console.error('Payment status check error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+}));
+
+// Mock payment completion endpoint (for testing purposes)
+router.post('/payment/complete/:transactionId', [
+  middlewareHandler(auth),
+  body('success').isBoolean().withMessage('Success status is required')
+], asyncHandler(async (req: Request, res: Response) => {
+  const { transactionId } = req.params;
+  const { success } = req.body;
+
+  try {
+    const completed = await mockPaymentService.completePayment(transactionId, success);
+
+    if (completed) {
+      res.status(200).json({
+        success: true,
+        message: `Payment ${success ? 'completed' : 'failed'} successfully`
+      });
+    } else {
+      res.status(404).json({
+        success: false,
+        message: 'Transaction not found'
+      });
+    }
+  } catch (error) {
+    console.error('Payment completion error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+}));
+
+// Mock payment callback handler
+router.get('/mock-payment', asyncHandler(async (req: Request, res: Response) => {
+  const { txn, amt, callback } = req.query;
+
+  if (!txn || !amt || !callback) {
+    return res.status(400).send('Missing required parameters');
+  }
+
+  // Render a simple payment page
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Mock Payment Gateway</title>
+        <style>
+            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
+            .payment-card { border: 1px solid #ddd; border-radius: 8px; padding: 30px; text-align: center; }
+            .amount { font-size: 24px; font-weight: bold; color: #2563eb; margin: 20px 0; }
+            .buttons { margin-top: 30px; }
+            button { padding: 12px 24px; margin: 0 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
+            .success { background-color: #16a34a; color: white; }
+            .failure { background-color: #dc2626; color: white; }
+            .info { background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0; }
+        </style>
+    </head>
+    <body>
+        <div class="payment-card">
+            <h2>Mock Payment Gateway</h2>
+            <div class="info">
+                <p><strong>Transaction ID:</strong> ${txn}</p>
+                <p><strong>Amount:</strong> ₹${amt}</p>
+            </div>
+            <div class="amount">₹${amt}</div>
+            <p>Choose payment outcome for testing:</p>
+            <div class="buttons">
+                <button class="success" onclick="completePayment(true)">Success Payment</button>
+                <button class="failure" onclick="completePayment(false)">Failed Payment</button>
+            </div>
+        </div>
+
+        <script>
+            async function completePayment(success) {
+                try {
+                    const response = await fetch('/api/payment/complete/${txn}', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ success })
+                    });
+
+                    if (response.ok) {
+                        // Redirect to callback URL with status
+                        const status = success ? 'SUCCESS' : 'FAILURE';
+                        window.location.href = '${callback}?status=' + status + '&txn=${txn}';
+                    } else {
+                        alert('Payment processing failed. Please try again.');
+                    }
+                } catch (error) {
+                    alert('Network error. Please try again.');
+                }
+            }
+        </script>
+    </body>
+    </html>
+  `;
+
+  res.send(html);
+}));
+
+// Admin route to view payment sessions (for debugging)
+router.get('/admin/payments', middlewareHandler(adminAuth), asyncHandler(async (req: Request, res: Response) => {
+  try {
+    const sessions = mockPaymentService.getPaymentSessions();
+    res.status(200).json({
+      success: true,
+      data: sessions
+    });
+  } catch (error) {
+    console.error('Get payment sessions error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Internal server error'
+    });
+  }
+}));
 
 export default router;
