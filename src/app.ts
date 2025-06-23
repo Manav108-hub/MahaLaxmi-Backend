@@ -33,12 +33,12 @@ app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// DEBUG: print every path this router is trying to register
-console.log(
-  (routes as any).stack
-    .filter((layer: any) => layer.route)
-    .map((layer: any) => layer.route.path)
-);
+// // DEBUG: print every path this router is trying to register
+// console.log(
+//   (routes as any).stack
+//     .filter((layer: any) => layer.route)
+//     .map((layer: any) => layer.route.path)
+// );
 
 // Routes
 app.use('/api', routes);

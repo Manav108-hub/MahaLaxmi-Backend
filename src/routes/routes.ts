@@ -69,9 +69,10 @@ router.post('/login', [
   body('password').notEmpty().withMessage('Password is required')
 ], asyncHandler(login));
 
-// User Routes
+// Get the user profile 
 router.get('/profile', middlewareHandler(auth), asyncHandler(getUserProfile));
 
+// enter the user profile
 router.post('/user-details', [
   middlewareHandler(auth),
   body('email').optional().isEmail().withMessage('Invalid email format'),
@@ -85,6 +86,8 @@ router.post('/user-details', [
 // Admin Routes
 router.get('/users/download', middlewareHandler(adminAuth), asyncHandler(downloadUsersCSV));
 
+
+
 // Category Routes
 router.post('/category', [
   middlewareHandler(adminAuth),
@@ -92,7 +95,10 @@ router.post('/category', [
   body('description').optional().trim()
 ], asyncHandler(createCategory));
 
+
+//get the categories
 router.get('/categories', asyncHandler(getCategories));
+
 
 // Product Routes
 router.post(
@@ -109,9 +115,11 @@ router.post(
   asyncHandler(createProduct)
 );
 
+//get the products
 router.get('/products', asyncHandler(getProducts));
 router.get('/product/:id', asyncHandler(getProductById));
 
+//update the product 
 router.put(
   '/product/:id',
   middlewareHandler(adminAuth),
@@ -126,6 +134,8 @@ router.put(
   asyncHandler(updateProduct)
 );
 
+
+
 // Cart Routes
 router.post('/cart', [
   middlewareHandler(auth),
@@ -133,14 +143,19 @@ router.post('/cart', [
   body('quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1')
 ], asyncHandler(addToCart));
 
+//get the cart
 router.get('/cart', middlewareHandler(auth), asyncHandler(getCart));
 
+//update the cart
 router.put('/cart/:itemId', [
   middlewareHandler(auth),
   body('quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1')
 ], asyncHandler(updateCartItem));
 
+
+//delete item from the cart
 router.delete('/cart/:itemId', middlewareHandler(auth), asyncHandler(removeFromCart));
+
 
 // Order Routes
 router.post('/order', [
@@ -149,8 +164,10 @@ router.post('/order', [
   body('shippingAddress').isObject().withMessage('Shipping address is required')
 ], asyncHandler(createOrder));
 
+//get orders
 router.get('/orders', middlewareHandler(auth), asyncHandler(getUserOrders));
 router.get('/order/:id', middlewareHandler(auth), asyncHandler(getOrderById));
+
 
 // Payment Routes for Orders
 router.post('/order/payment/initiate', [
