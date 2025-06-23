@@ -1,5 +1,8 @@
 // services/emailService.ts
 import { Resend } from 'resend';
+import dotenv from 'dotenv';
+dotenv.config();
+
 
 const resend = new Resend(process.env.RESEND_API_KEY!);
 
@@ -31,7 +34,8 @@ export interface EmailOptions {
 
 export class EmailService {
   private static instance: EmailService;
-  private defaultFrom = 'noreply@yourdomain.com';
+  private defaultFrom = process.env.DEFAULT_FROM || 'onboarding@resend.dev';
+
 
   private constructor() {}
 
