@@ -19,7 +19,7 @@ export const uploadToS3 = multer({
   storage: multerS3({
     s3: s3Client,
     bucket: process.env.S3_BUCKET_NAME!,
-    acl: 'public-read',
+    // acl: 'public-read',
     contentType: multerS3.AUTO_CONTENT_TYPE,
     key: function (
       req: Express.Request,

@@ -1,5 +1,8 @@
 // services/emailService.ts
 import { Resend } from 'resend';
+import dotenv from 'dotenv';
+dotenv.config();
+
 
 const resend = new Resend(process.env.RESEND_API_KEY!);
 
@@ -13,6 +16,7 @@ export interface OrderWithUserAndItems {
     userDetails?: {
       email?: string | null;
       phone?: string | null;
+      address?: string | null;
     } | null;
   };
   orderItems: Array<{
@@ -31,7 +35,8 @@ export interface EmailOptions {
 
 export class EmailService {
   private static instance: EmailService;
-  private defaultFrom = 'noreply@yourdomain.com';
+  private defaultFrom = process.env.DEFAULT_FROM || 'onboarding@resend.dev';
+
 
   private constructor() {}
 
@@ -122,6 +127,7 @@ export class EmailService {
           <p><strong>Username:</strong> ${order.user.username}</p>
           <p><strong>Email:</strong> ${order.user.userDetails?.email ?? 'N/A'}</p>
           <p><strong>Phone:</strong> ${order.user.userDetails?.phone ?? 'N/A'}</p>
+          <p><strong>Address:</strong> ${order.user.userDetails?.address ?? 'N/A'}</p>
           <h4>Items:</h4>
           <ul>${orderItemsHtml}</ul>
         </div>

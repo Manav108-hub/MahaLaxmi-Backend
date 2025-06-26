@@ -19,6 +19,7 @@ model User {
   userDetails UserDetails?
   cart        Cart[]
   orders      Order[]
+  payments    Payment[]
   
   @@map("users")
 }
@@ -118,6 +119,7 @@ model Order {
   
   user       User        @relation(fields: [userId], references: [id])
   orderItems OrderItem[]
+  payments   Payment[]
   
   @@map("orders")
 }
@@ -134,6 +136,29 @@ model OrderItem {
   product Product @relation(fields: [productId], references: [id])
   
   @@map("order_items")
+}
+
+model Payment {
+  id                    String        @id @default(auto()) @map("_id") @db.ObjectId
+  orderId               String        @db.ObjectId
+  userId                String        @db.ObjectId
+  transactionId         String        @unique // From mock payment service
+  merchantTransactionId String        // Order ID used as merchant transaction ID
+  amount                Float
+  status                PaymentTransactionStatus @default(PENDING)
+  paymentMethod         String        @default("MOCK_GATEWAY")
+  paymentUrl            String?
+  callbackUrl           String?
+  mobileNumber          String?
+  gatewayResponse       Json?         // Store any gateway response data
+  completedAt           DateTime?
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+  
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id])
+  
+  @@map("payments")
 }
 
 enum PaymentStatus {
@@ -157,4 +182,10 @@ enum DeliveryStatus {
 enum PaymentMethod {
   COD
   ONLINE
+}
+
+enum PaymentTransactionStatus {
+  PENDING
+  SUCCESS
+  FAILURE
 }

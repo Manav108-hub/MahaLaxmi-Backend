@@ -1,12 +1,5 @@
-// services/paymentService.ts
-
+// services/mockPaymentService.ts
 import crypto from 'crypto';
-
-// Use dynamic import for node-fetch to avoid ESM errors
-const fetch = async (...args: Parameters<typeof import('node-fetch')['default']>) => {
-  const { default: fetchFn } = await import('node-fetch');
-  return fetchFn(...args);
-};
 
 export interface PaymentRequest {
   merchantTransactionId: string;
@@ -31,139 +24,143 @@ export interface PaymentStatus {
   paymentMethod?: string;
 }
 
-interface PhonePeApiResponse<T = any> {
-  success: boolean;
-  data?: T;
-  code?: string;
-  message?: string;
-}
+export class MockPaymentService {
+  private static instance: MockPaymentService;
+  private baseUrl = process.env.BACKEND_URL || 'http://localhost:5000';
 
-export class PaymentService {
-  private static instance: PaymentService;
-  private merchantId = process.env.PHONEPE_MERCHANT_ID!;
-  private saltKey = process.env.PHONEPE_SALT_KEY!;
-  private saltIndex = process.env.PHONEPE_SALT_INDEX!;
-  private baseUrl = 'https://api-preprod.phonepe.com/apis/pg-sandbox';
+  // Store payment sessions in memory (use Redis in production)
+  private paymentSessions = new Map<string, {
+    amount: number;
+    userId: string;
+    orderId: string;
+    status: 'PENDING' | 'SUCCESS' | 'FAILURE';
+    createdAt: Date;
+  }>();
 
   private constructor() {}
 
-  public static getInstance(): PaymentService {
-    if (!PaymentService.instance) {
-      PaymentService.instance = new PaymentService();
+  public static getInstance(): MockPaymentService {
+    if (!MockPaymentService.instance) {
+      MockPaymentService.instance = new MockPaymentService();
     }
-    return PaymentService.instance;
-  }
-
-  private generateChecksum(payload: string): string {
-    const str = payload + '/pg/v1/pay' + this.saltKey;
-    const hash = crypto.createHash('sha256').update(str).digest('hex');
-    return `${hash}###${this.saltIndex}`;
-  }
-
-  private generateStatusChecksum(txn: string): string {
-    const str = `/pg/v1/status/${this.merchantId}/${txn}` + this.saltKey;
-    const hash = crypto.createHash('sha256').update(str).digest('hex');
-    return `${hash}###${this.saltIndex}`;
+    return MockPaymentService.instance;
   }
 
   public async initiatePayment(req: PaymentRequest): Promise<PaymentResponse> {
-    const payloadObj = {
-      merchantId: this.merchantId,
-      merchantTransactionId: req.merchantTransactionId,
-      merchantUserId: req.merchantUserId,
-      amount: Math.round(req.amount * 100),
-      redirectUrl: req.callbackUrl,
-      callbackUrl: req.callbackUrl,
-      redirectMode: 'POST',
-      mobileNumber: req.mobileNumber ?? undefined,
-      paymentInstrument: { type: 'PAY_PAGE' },
-    };
+    try {
+      // Simulate API delay
+      await this.delay(500);
 
-    const base64Payload = Buffer.from(JSON.stringify(payloadObj)).toString('base64');
-    const checksum = this.generateChecksum(base64Payload);
+      const transactionId = this.generateTransactionId(req.merchantUserId);
+      
+      // Store payment session
+      this.paymentSessions.set(transactionId, {
+        amount: req.amount,
+        userId: req.merchantUserId,
+        orderId: req.merchantTransactionId,
+        status: 'PENDING',
+        createdAt: new Date()
+      });
 
-    const response = await fetch(`${this.baseUrl}/pg/v1/pay`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-VERIFY': checksum,
-      },
-      body: JSON.stringify({ request: base64Payload }),
-    });
+      // Create mock payment URL
+      const paymentUrl = `${this.baseUrl}/mock-payment?txn=${transactionId}&amt=${req.amount}&callback=${encodeURIComponent(req.callbackUrl)}`;
 
-    if (!response.ok) {
-      return { success: false, error: `HTTP ${response.status}` };
-    }
-
-    const result = (await response.json()) as PhonePeApiResponse<{
-      instrumentResponse?: {
-        redirectInfo?: { url: string };
-      };
-    }>;
-
-    if (result.success && result.data?.instrumentResponse?.redirectInfo?.url) {
       return {
         success: true,
-        paymentUrl: result.data.instrumentResponse.redirectInfo.url,
-        transactionId: req.merchantTransactionId,
+        paymentUrl,
+        transactionId,
       };
+    } catch (error) {
+      console.error('Mock payment initiation error:', error);
+      return { success: false, error: 'Payment service unavailable' };
     }
-
-    const errMsg = result.code ? `[${result.code}] ${result.message}` : result.message || 'Payment initiation failed';
-    return { success: false, error: errMsg };
   }
 
   public async checkPaymentStatus(transactionId: string): Promise<PaymentStatus> {
-    const checksum = this.generateStatusChecksum(transactionId);
+    try {
+      // Simulate API delay
+      await this.delay(300);
 
-    const response = await fetch(
-      `${this.baseUrl}/pg/v1/status/${this.merchantId}/${transactionId}`,
-      {
-        method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-VERIFY': checksum,
-          'X-MERCHANT-ID': this.merchantId,
-        },
+      const session = this.paymentSessions.get(transactionId);
+      if (!session) {
+        return {
+          success: false,
+          status: 'FAILURE',
+          transactionId,
+        };
       }
-    );
 
-    if (!response.ok) {
-      return { success: false, status: 'FAILURE', transactionId };
-    }
-
-    const result = (await response.json()) as PhonePeApiResponse<{
-      state?: 'COMPLETED' | 'FAILED' | string;
-      amount?: number;
-      paymentInstrument?: { type: string };
-    }>;
-
-    if (result.success && result.data) {
-      let status: PaymentStatus['status'] = 'PENDING';
-      if (result.data.state === 'COMPLETED') status = 'SUCCESS';
-      if (result.data.state === 'FAILED') status = 'FAILURE';
+      // Auto-complete payment after 30 seconds for demo
+      const now = new Date();
+      const timeDiff = now.getTime() - session.createdAt.getTime();
+      
+      if (timeDiff > 30000 && session.status === 'PENDING') {
+        // 90% success rate for testing
+        session.status = Math.random() > 0.1 ? 'SUCCESS' : 'FAILURE';
+        this.paymentSessions.set(transactionId, session);
+      }
 
       return {
         success: true,
-        status,
+        status: session.status,
         transactionId,
-        amount: result.data.amount ? result.data.amount / 100 : undefined,
-        paymentMethod: result.data.paymentInstrument?.type,
+        amount: session.amount,
+        paymentMethod: 'MOCK_GATEWAY',
+      };
+    } catch (error) {
+      console.error('Mock payment status check error:', error);
+      return {
+        success: false,
+        status: 'FAILURE',
+        transactionId,
       };
     }
+  }
 
-    return {
-      success: false,
-      status: 'FAILURE',
-      transactionId,
-    };
+  // Simulate payment completion (for testing)
+  public async completePayment(transactionId: string, success: boolean = true): Promise<boolean> {
+    const session = this.paymentSessions.get(transactionId);
+    if (!session) return false;
+
+    session.status = success ? 'SUCCESS' : 'FAILURE';
+    this.paymentSessions.set(transactionId, session);
+    return true;
+  }
+
+  // Get all payment sessions (for debugging)
+  public getPaymentSessions() {
+    return Array.from(this.paymentSessions.entries()).map(([id, session]) => ({
+      transactionId: id,
+      ...session
+    }));
   }
 
   public generateTransactionId(userId: string): string {
     const ts = Date.now();
     const rand = Math.random().toString(36).substr(2, 8);
-    return `TXN_${userId}_${ts}_${rand}`.toUpperCase();
+    return `MOCK_${userId}_${ts}_${rand}`.toUpperCase();
+  }
+
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // Cleanup old sessions (call this periodically)
+  public cleanup(): void {
+    const now = new Date();
+    for (const [id, session] of this.paymentSessions.entries()) {
+      const timeDiff = now.getTime() - session.createdAt.getTime();
+      // Remove sessions older than 1 hour
+      if (timeDiff > 3600000) {
+        this.paymentSessions.delete(id);
+      }
+    }
   }
 }
 
-export const paymentService = PaymentService.getInstance();
+export const mockPaymentService = MockPaymentService.getInstance();
+
+// Clean up old sessions every 10 minutes
+setInterval(() => {
+  mockPaymentService.cleanup();
+}, 600000);
