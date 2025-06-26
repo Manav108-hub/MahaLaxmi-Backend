@@ -14,7 +14,20 @@ const prisma = new PrismaClient();
 const PORT = process.env.PORT || 5000;
 
 // Security middleware
-app.use(helmet());
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      useDefaults: true,               // start from Helmet’s defaults
+      directives: {
+        // allow scripts from self *and* inline scripts
+        "script-src": ["'self'", "'unsafe-inline'"],
+        // allow inline event handlers (onclick, etc.)
+        "script-src-attr": ["'self'", "'unsafe-inline'"],
+        // you can leave other directives as-is or customize further
+      }
+    }
+  })
+);
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
   credentials: true

@@ -1,3 +1,4 @@
+// src/controllers/orderController.ts
 import { Request, Response } from 'express';
 import { validationResult } from 'express-validator';
 import { PrismaClient } from '@prisma/client';
@@ -17,7 +18,8 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    const { paymentMethod, shippingAddress } = req.body;
+    // DESTRUCTURE cartItemIds along with paymentMethod & shippingAddress
+    const { paymentMethod, shippingAddress, cartItemIds } = req.body; // ADDED cartItemIds
     const userId = req.user.id;
 
     const user = await prisma.user.findUnique({
@@ -36,17 +38,28 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       }
     }
 
+    // MAJOR CHANGE: only fetch the selected cart items
     const cartItems = await prisma.cart.findMany({
-      where: { userId },
+      where: { userId, id: { in: cartItemIds } }, // ADJUSTED filter
       include: {
         product: true
       }
     });
 
-    if (cartItems.length === 0) {
-      return res.status(400).json({ error: 'Cart is empty' });
+    // ADDED: ensure requested IDs exist
+    if (cartItems.length !== cartItemIds.length) {
+      return res.status(400).json({ error: 'Some selected items are not in your cart' });
     }
 
+    // ADDED: reject inactive products
+    const inactive = cartItems.filter(i => !i.product.isActive);
+    if (inactive.length) {
+      return res.status(400).json({
+        error: `Unavailable: ${inactive.map(i => i.product.name).join(', ')}`
+      });
+    }
+
+    // Check stock for selected items
     for (const item of cartItems) {
       if (item.product.stock < item.quantity) {
         return res.status(400).json({
@@ -91,8 +104,9 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       )
     );
 
+    // MAJOR CHANGE: delete only the selected cart items
     await prisma.cart.deleteMany({
-      where: { userId }
+      where: { userId, id: { in: cartItemIds } } // ADJUSTED filter
     });
 
     const completeOrder = await prisma.order.findUnique({
@@ -125,7 +139,11 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
 
     res.status(201).json({
       message: 'Order created successfully',
-      order: completeOrder
+      order: completeOrder,
+      orderSummary: {
+        itemsOrdered: cartItems.length, // ADDED summary
+        totalCartItemsRemaining: await prisma.cart.count({ where: { userId } }) // ADDED summary
+      }
     });
   } catch (error) {
     console.error('Create order error:', error);
@@ -392,7 +410,7 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
 
     const order = await prisma.order.findUnique({
       where: { id: orderId },
-      include: { 
+      include: {
         user: {
           include: { userDetails: true }
         }
@@ -505,9 +523,9 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
     const statusResult = await mockPaymentService.checkPaymentStatus(transactionId);
 
     if (!statusResult.success) {
-      return res.status(400).json({ 
-        error: 'Unable to verify payment status', 
-        status: statusResult.status 
+      return res.status(400).json({
+        error: 'Unable to verify payment status',
+        status: statusResult.status
       });
     }
 

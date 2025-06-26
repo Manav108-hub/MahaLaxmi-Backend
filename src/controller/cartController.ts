@@ -216,3 +216,54 @@ export const removeFromCart = async (req: AuthRequest, res: Response) => {
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
+// NEW: preview selected cart items
+export const getSelectedCartItems = async (req: AuthRequest, res: Response) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty())
+    return res.status(400).json({ errors: errors.array() });
+
+  const { cartItemIds } = req.body;                                   // ADDED
+  const userId = req.user.id;
+
+  const items = await prisma.cart.findMany({
+    where: { userId, id: { in: cartItemIds } },                      // ADJUSTED filter
+    include: {
+      product: {
+        select: { id: true, name: true, price: true, images: true, stock: true, isActive: true }
+      }
+    }
+  });
+
+  // ADDED validations:
+  if (items.length !== cartItemIds.length) {
+    return res.status(400).json({ error: 'Some items not found in your cart' });
+  }
+
+  const inactive = items.filter(i => !i.product.isActive);
+  if (inactive.length) {
+    return res.status(400).json({
+      error: `Unavailable: ${inactive.map(i => i.product.name).join(', ')}`
+    });
+  }
+
+  const oos = items.filter(i => i.product.stock < i.quantity);
+  if (oos.length) {
+    return res.status(400).json({
+      error: `Insufficient stock: ${oos.map(i => i.product.name).join(', ')}`
+    });
+  }
+
+  // CALCULATE totals
+  const totalItems = items.reduce((sum, i) => sum + i.quantity, 0);
+  const totalAmount = items.reduce((sum, i) => sum + i.quantity * i.product.price, 0);
+
+  res.json({
+    cartItems: items,
+    summary: {
+      selectedItemsCount: items.length,                              // ADDED
+      totalItems,                                                    // ADDED
+      totalAmount: parseFloat(totalAmount.toFixed(2))               // ADDED
+    }
+  });
+};

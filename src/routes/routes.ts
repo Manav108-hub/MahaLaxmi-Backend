@@ -15,7 +15,8 @@ import {
   addToCart, 
   getCart, 
   updateCartItem, 
-  removeFromCart 
+  removeFromCart,
+  getSelectedCartItems   
 } from '../controller/cartController';
 import { 
   createOrder, 
@@ -156,12 +157,23 @@ router.put('/cart/:itemId', [
 //delete item from the cart
 router.delete('/cart/:itemId', middlewareHandler(auth), asyncHandler(removeFromCart));
 
+//selected cart module
+router.post('/cart/selected', [
+  middlewareHandler(auth),
+  body('cartItemIds').isArray({ min: 1 }).withMessage('At least one cart item must be selected'),  // ADDED
+  body('cartItemIds.*').isString().withMessage('Invalid cart item ID format')                  // ADDED
+], asyncHandler(getSelectedCartItems));
+
 
 // Order Routes
 router.post('/order', [
   middlewareHandler(auth),
   body('paymentMethod').isIn(['COD', 'ONLINE']).withMessage('Invalid payment method'),
-  body('shippingAddress').isObject().withMessage('Shipping address is required')
+  body('shippingAddress').isObject().withMessage('Shipping address is required'),
+
+  // ADDED validation for cartItemIds
+  body('cartItemIds').isArray({ min: 1 }).withMessage('At least one cart item must be selected'),  // ADDED
+  body('cartItemIds.*').isString().withMessage('Invalid cart item ID format')                     // ADDED
 ], asyncHandler(createOrder));
 
 //get orders
@@ -288,72 +300,79 @@ router.post('/payment/complete/:transactionId', [
 }));
 
 // Mock payment callback handler
-router.get('/mock-payment', asyncHandler(async (req: Request, res: Response) => {
+router.get('/mock-payment', asyncHandler(async (req, res) => {
   const { txn, amt, callback } = req.query;
-
   if (!txn || !amt || !callback) {
     return res.status(400).send('Missing required parameters');
   }
 
-  // Render a simple payment page
   const html = `
     <!DOCTYPE html>
-    <html>
+    <html lang="en">
     <head>
-        <title>Mock Payment Gateway</title>
-        <style>
-            body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-            .payment-card { border: 1px solid #ddd; border-radius: 8px; padding: 30px; text-align: center; }
-            .amount { font-size: 24px; font-weight: bold; color: #2563eb; margin: 20px 0; }
-            .buttons { margin-top: 30px; }
-            button { padding: 12px 24px; margin: 0 10px; border: none; border-radius: 6px; cursor: pointer; font-size: 16px; }
-            .success { background-color: #16a34a; color: white; }
-            .failure { background-color: #dc2626; color: white; }
-            .info { background-color: #f3f4f6; padding: 15px; border-radius: 6px; margin: 20px 0; }
-        </style>
+      <meta charset="UTF-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">  <!-- responsive -->
+      <title>Mock Payment Gateway</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        .payment-card {
+          max-width: 400px;
+          margin: 40px auto;
+          border: 1px solid #ddd;
+          border-radius: 8px;
+          padding: 20px;
+          box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+        }
+        .amount { font-size: 2rem; color: #2563eb; margin: 20px 0; }
+        .buttons { display: flex; justify-content: space-around; margin-top: 20px; }
+        button {
+          flex: 1;
+          margin: 0 5px;
+          padding: 12px 0;
+          border: none;
+          border-radius: 6px;
+          font-size: 1rem;
+          cursor: pointer;
+        }
+        .success { background-color: #16a34a; color: white; }
+        .failure { background-color: #dc2626; color: white; }
+      </style>
     </head>
     <body>
-        <div class="payment-card">
-            <h2>Mock Payment Gateway</h2>
-            <div class="info">
-                <p><strong>Transaction ID:</strong> ${txn}</p>
-                <p><strong>Amount:</strong> ₹${amt}</p>
-            </div>
-            <div class="amount">₹${amt}</div>
-            <p>Choose payment outcome for testing:</p>
-            <div class="buttons">
-                <button class="success" onclick="completePayment(true)">Success Payment</button>
-                <button class="failure" onclick="completePayment(false)">Failed Payment</button>
-            </div>
+      <div class="payment-card">
+        <h2>Mock Payment Gateway</h2>
+        <p><strong>Transaction ID:</strong> ${txn}</p>
+        <p><strong>Amount:</strong> ₹${amt}</p>
+        <div class="amount">₹${amt}</div>
+        <div class="buttons">
+          <button class="success" onclick="completePayment(true)">Success</button>
+          <button class="failure" onclick="completePayment(false)">Failure</button>
         </div>
+      </div>
 
-        <script>
-            async function completePayment(success) {
-                try {
-                    const response = await fetch('/api/payment/complete/${txn}', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ success })
-                    });
-
-                    if (response.ok) {
-                        // Redirect to callback URL with status
-                        const status = success ? 'SUCCESS' : 'FAILURE';
-                        window.location.href = '${callback}?status=' + status + '&txn=${txn}';
-                    } else {
-                        alert('Payment processing failed. Please try again.');
-                    }
-                } catch (error) {
-                    alert('Network error. Please try again.');
-                }
-            }
-        </script>
+      <script>
+        // Use the same origin & correct path
+        async function completePayment(success) {
+          try {
+            const resp = await fetch(window.location.origin + '/api/payment/complete/${txn}', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json'
+              },
+              body: JSON.stringify({ success })
+            });
+            if (!resp.ok) throw new Error('Network response was not ok');
+            // then redirect to your callback URL
+            const status = success ? 'SUCCESS' : 'FAILURE';
+            window.location.href = '${callback}?status=' + status + '&txn=${txn}';
+          } catch (err) {
+            alert('Error completing payment: ' + err.message);
+          }
+        }
+      </script>
     </body>
     </html>
   `;
-
   res.send(html);
 }));
 
