@@ -16,6 +16,7 @@ export interface OrderWithUserAndItems {
     userDetails?: {
       email?: string | null;
       phone?: string | null;
+      address?: string | null;
     } | null;
   };
   orderItems: Array<{
@@ -126,6 +127,7 @@ export class EmailService {
           <p><strong>Username:</strong> ${order.user.username}</p>
           <p><strong>Email:</strong> ${order.user.userDetails?.email ?? 'N/A'}</p>
           <p><strong>Phone:</strong> ${order.user.userDetails?.phone ?? 'N/A'}</p>
+          <p><strong>Address:</strong> ${order.user.userDetails?.address ?? 'N/A'}</p>
           <h4>Items:</h4>
           <ul>${orderItemsHtml}</ul>
         </div>

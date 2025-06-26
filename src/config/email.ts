@@ -13,7 +13,7 @@ export interface EmailOptions {
 export const sendEmail = async (options: EmailOptions) => {
   try {
     const { data, error } = await resend.emails.send({
-      from: options.from || 'onboarding@resend.dev',
+      from: options.from || 'themanav.xyz',
       to: options.to,
       subject: options.subject,
       html: options.html,
