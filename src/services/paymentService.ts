@@ -63,7 +63,7 @@ export class MockPaymentService {
       });
 
       // Create mock payment URL
-      const paymentUrl = `${this.baseUrl}/mock-payment?txn=${transactionId}&amt=${req.amount}&callback=${encodeURIComponent(req.callbackUrl)}`;
+      const paymentUrl = `${this.baseUrl}/api/mock-payment?txn=${transactionId}&amt=${req.amount}&callback=${encodeURIComponent(req.callbackUrl)}`;
 
       return {
         success: true,

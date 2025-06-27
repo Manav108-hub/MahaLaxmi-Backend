@@ -17,7 +17,8 @@ import {
   createProduct, 
   getProducts, 
   getProductById,
-  updateProduct 
+  updateProduct,
+  getProductBySlug 
 } from '../controller/productController';
 import { 
   addToCart, 
@@ -116,6 +117,7 @@ router.post(
 
 router.get('/products', asyncHandler(getProducts));
 router.get('/product/:id', asyncHandler(getProductById));
+router.get('/api/products/slug/:slug', asyncHandler(getProductBySlug));
 
 router.put(
   '/product/:id',
@@ -296,49 +298,68 @@ router.post('/payment/complete/:transactionId', [
 
 // Mock payment callback handler
 router.get('/mock-payment', asyncHandler(async (req, res) => {
-  const { txn, amt, callback } = req.query;
+  const txn = req.query.txn as string;
+  const amt = req.query.amt as string;
+  const callback = decodeURIComponent(req.query.callback as string);
+
   if (!txn || !amt || !callback) {
-    return res.status(400).send('Missing required parameters');
+    return res.status(400).send('❌ Missing required parameters: txn, amt, callback');
   }
+
+  // Basic XSS-safe sanitization (escape for HTML context)
+  const escapeHtml = (str: string) =>
+    str.replace(/[&<>'"]/g, tag => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      "'": '&#39;',
+      '"': '&quot;',
+    }[tag] || tag));
+
+  const safeTxn = escapeHtml(txn);
+  const safeAmt = escapeHtml(amt);
+  const safeCallback = escapeHtml(callback);
 
   const html = `
     <!DOCTYPE html>
     <html lang="en">
     <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <meta charset="UTF-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
       <title>Mock Payment Gateway</title>
       <style>
-        body { font-family: Arial, sans-serif; margin: 0; padding: 20px; }
+        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f9f9f9; }
         .payment-card {
           max-width: 400px;
-          margin: 40px auto;
-          border: 1px solid #ddd;
-          border-radius: 8px;
-          padding: 20px;
-          box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+          margin: 50px auto;
+          background: #fff;
+          padding: 30px;
+          border-radius: 10px;
+          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+          text-align: center;
         }
-        .amount { font-size: 2rem; color: #2563eb; margin: 20px 0; }
-        .buttons { display: flex; justify-content: space-around; margin-top: 20px; }
+        .amount { font-size: 2rem; margin: 20px 0; color: #2563eb; }
+        .txn { word-break: break-all; font-size: 0.9rem; color: #555; }
+        .buttons { display: flex; gap: 12px; margin-top: 20px; justify-content: center; }
         button {
           flex: 1;
-          margin: 0 5px;
           padding: 12px 0;
           border: none;
           border-radius: 6px;
           font-size: 1rem;
           cursor: pointer;
+          transition: background 0.2s ease;
         }
-        .success { background-color: #16a34a; color: white; }
-        .failure { background-color: #dc2626; color: white; }
+        .success { background-color: #16a34a; color: #fff; }
+        .failure { background-color: #dc2626; color: #fff; }
       </style>
     </head>
     <body>
       <div class="payment-card">
         <h2>Mock Payment Gateway</h2>
-        <p><strong>Transaction ID:</strong> ${txn}</p>
-        <p><strong>Amount:</strong> ₹${amt}</p>
-        <div class="amount">₹${amt}</div>
+        <p class="txn"><strong>Txn ID:</strong> ${safeTxn}</p>
+        <p><strong>Amount:</strong></p>
+        <div class="amount">₹${safeAmt}</div>
         <div class="buttons">
           <button class="success" onclick="completePayment(true)">Success</button>
           <button class="failure" onclick="completePayment(false)">Failure</button>
@@ -348,24 +369,24 @@ router.get('/mock-payment', asyncHandler(async (req, res) => {
       <script>
         async function completePayment(success) {
           try {
-            const resp = await fetch(window.location.origin + '/api/payment/complete/${txn}', {
+            const resp = await fetch('/api/payment/complete/${safeTxn}', {
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/json'
-              },
+              headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ success })
             });
-            if (!resp.ok) throw new Error('Network response was not ok');
+            if (!resp.ok) throw new Error('Failed to complete payment');
             const status = success ? 'SUCCESS' : 'FAILURE';
-            window.location.href = '${callback}?status=' + status + '&txn=${txn}';
+            window.location.href = '${safeCallback}?status=' + status + '&txn=${safeTxn}';
           } catch (err) {
-            alert('Error completing payment: ' + err.message);
+            alert('Error: ' + err.message);
           }
         }
       </script>
     </body>
     </html>
   `;
+
+  res.setHeader('Content-Type', 'text/html');
   res.send(html);
 }));
 
