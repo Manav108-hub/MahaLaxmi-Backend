@@ -1,4 +1,3 @@
-// src/controllers/orderController.ts
 import { Request, Response } from 'express';
 import { validationResult } from 'express-validator';
 import { PrismaClient } from '@prisma/client';
@@ -7,20 +6,15 @@ import { mockPaymentService } from '../services/paymentService';
 
 const prisma = new PrismaClient();
 
-interface AuthRequest extends Request {
-  user?: any;
-}
-
-export const createOrder = async (req: AuthRequest, res: Response) => {
+export const createOrder = async (req: Request, res: Response) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
       return res.status(400).json({ errors: errors.array() });
     }
 
-    // DESTRUCTURE cartItemIds along with paymentMethod & shippingAddress
-    const { paymentMethod, shippingAddress, cartItemIds } = req.body; // ADDED cartItemIds
-    const userId = req.user.id;
+    const { paymentMethod, shippingAddress, cartItemIds } = req.body;
+    const userId = req.user!.id;
 
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -38,20 +32,15 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    // MAJOR CHANGE: only fetch the selected cart items
     const cartItems = await prisma.cart.findMany({
-      where: { userId, id: { in: cartItemIds } }, // ADJUSTED filter
-      include: {
-        product: true
-      }
+      where: { userId, id: { in: cartItemIds } },
+      include: { product: true }
     });
 
-    // ADDED: ensure requested IDs exist
     if (cartItems.length !== cartItemIds.length) {
       return res.status(400).json({ error: 'Some selected items are not in your cart' });
     }
 
-    // ADDED: reject inactive products
     const inactive = cartItems.filter(i => !i.product.isActive);
     if (inactive.length) {
       return res.status(400).json({
@@ -59,7 +48,6 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Check stock for selected items
     for (const item of cartItems) {
       if (item.product.stock < item.quantity) {
         return res.status(400).json({
@@ -68,8 +56,9 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       }
     }
 
-    const totalAmount = cartItems.reduce((sum: number, item: { product: { price: number; }; quantity: number; }) =>
-      sum + (item.product.price * item.quantity), 0
+    const totalAmount = cartItems.reduce(
+      (sum, item) => sum + (item.product.price * item.quantity), 
+      0
     );
 
     const order = await prisma.order.create({
@@ -83,7 +72,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     });
 
     const orderItems = await Promise.all(
-      cartItems.map((item: { productId: any; quantity: any; product: { price: any; }; }) =>
+      cartItems.map(item =>
         prisma.orderItem.create({
           data: {
             orderId: order.id,
@@ -96,7 +85,7 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
     );
 
     await Promise.all(
-      cartItems.map((item: { productId: any; quantity: any; }) =>
+      cartItems.map(item =>
         prisma.product.update({
           where: { id: item.productId },
           data: { stock: { decrement: item.quantity } }
@@ -104,23 +93,18 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       )
     );
 
-    // MAJOR CHANGE: delete only the selected cart items
     await prisma.cart.deleteMany({
-      where: { userId, id: { in: cartItemIds } } // ADJUSTED filter
+      where: { userId, id: { in: cartItemIds } }
     });
 
     const completeOrder = await prisma.order.findUnique({
       where: { id: order.id },
       include: {
         orderItems: {
-          include: {
-            product: true
-          }
+          include: { product: true }
         },
         user: {
-          include: {
-            userDetails: true
-          }
+          include: { userDetails: true }
         }
       }
     });
@@ -141,8 +125,8 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
       message: 'Order created successfully',
       order: completeOrder,
       orderSummary: {
-        itemsOrdered: cartItems.length, // ADDED summary
-        totalCartItemsRemaining: await prisma.cart.count({ where: { userId } }) // ADDED summary
+        itemsOrdered: cartItems.length,
+        totalCartItemsRemaining: await prisma.cart.count({ where: { userId } })
       }
     });
   } catch (error) {
@@ -151,9 +135,9 @@ export const createOrder = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const getUserOrders = async (req: AuthRequest, res: Response) => {
+export const getUserOrders = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user!.id;
     const { page = 1, limit = 10 } = req.query;
 
     const skip = (parseInt(page as string) - 1) * parseInt(limit as string);
@@ -182,7 +166,6 @@ export const getUserOrders = async (req: AuthRequest, res: Response) => {
       prisma.order.count({ where: { userId } })
     ]);
 
-    // Fetch payments separately if needed
     const ordersWithPayments = await Promise.all(
       orders.map(async (order) => {
         const latestPayment = await prisma.payment.findFirst({
@@ -211,24 +194,20 @@ export const getUserOrders = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const getOrderById = async (req: AuthRequest, res: Response) => {
+export const getOrderById = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
-    const userId = req.user.id;
-    const isAdmin = req.user.isAdmin;
+    const userId = req.user!.id;
+    const isAdmin = req.user!.isAdmin;
 
     const order = await prisma.order.findUnique({
       where: { id },
       include: {
         orderItems: {
-          include: {
-            product: true
-          }
+          include: { product: true }
         },
         user: {
-          include: {
-            userDetails: true
-          }
+          include: { userDetails: true }
         }
       }
     });
@@ -241,7 +220,6 @@ export const getOrderById = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Fetch payments separately
     const payments = await prisma.payment.findMany({
       where: { orderId: id },
       orderBy: { createdAt: 'desc' }
@@ -275,14 +253,8 @@ export const getAllOrders = async (req: Request, res: Response) => {
 
     const where: any = {};
 
-    if (status) {
-      where.deliveryStatus = status;
-    }
-
-    if (paymentStatus) {
-      where.paymentStatus = paymentStatus;
-    }
-
+    if (status) where.deliveryStatus = status;
+    if (paymentStatus) where.paymentStatus = paymentStatus;
     if (startDate || endDate) {
       where.createdAt = {};
       if (startDate) where.createdAt.gte = new Date(startDate as string);
@@ -319,7 +291,6 @@ export const getAllOrders = async (req: Request, res: Response) => {
       prisma.order.count({ where })
     ]);
 
-    // Fetch latest payment for each order
     const ordersWithPayments = await Promise.all(
       orders.map(async (order) => {
         const latestPayment = await prisma.payment.findFirst({
@@ -367,19 +338,14 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
       data: updateData,
       include: {
         orderItems: {
-          include: {
-            product: true
-          }
+          include: { product: true }
         },
         user: {
-          include: {
-            userDetails: true
-          }
+          include: { userDetails: true }
         }
       }
     });
 
-    // Fetch payments separately
     const payments = await prisma.payment.findMany({
       where: { orderId: id },
       orderBy: { createdAt: 'desc' }
@@ -398,7 +364,7 @@ export const updateOrderStatus = async (req: Request, res: Response) => {
   }
 };
 
-export const initiatePayment = async (req: AuthRequest, res: Response) => {
+export const initiatePayment = async (req: Request, res: Response) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -429,7 +395,6 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
       return res.status(400).json({ error: 'This order does not require online payment' });
     }
 
-    // Check if there's already a pending payment for this order
     const existingPayment = await prisma.payment.findFirst({
       where: {
         orderId: orderId,
@@ -438,7 +403,6 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
     });
 
     if (existingPayment) {
-      // Return existing payment details
       return res.json({
         message: 'Payment already initiated',
         paymentUrl: existingPayment.paymentUrl!,
@@ -461,7 +425,6 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
       return res.status(502).json({ error: paymentResponse.error || 'Payment initiation failed' });
     }
 
-    // Create payment record in database
     const payment = await prisma.payment.create({
       data: {
         orderId: orderId,
@@ -488,7 +451,7 @@ export const initiatePayment = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const verifyPayment = async (req: AuthRequest, res: Response) => {
+export const verifyPayment = async (req: Request, res: Response) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -498,7 +461,6 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
     const { transactionId } = req.body;
     const userId = req.user!.id;
 
-    // Find payment record
     const payment = await prisma.payment.findUnique({
       where: { transactionId: transactionId },
       include: {
@@ -519,7 +481,6 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
       return res.status(403).json({ error: 'Access denied' });
     }
 
-    // Check payment status with mock service
     const statusResult = await mockPaymentService.checkPaymentStatus(transactionId);
 
     if (!statusResult.success) {
@@ -529,7 +490,6 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Update payment record
     const updatedPayment = await prisma.payment.update({
       where: { id: payment.id },
       data: {
@@ -545,7 +505,6 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
 
     let updatedOrder = payment.order;
 
-    // Update order status if payment successful
     if (statusResult.status === 'SUCCESS') {
       updatedOrder = await prisma.order.update({
         where: { id: payment.orderId },
@@ -559,7 +518,6 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
         }
       });
 
-      // Send confirmation emails
       try {
         await emailService.sendOrderConfirmation(
           updatedOrder.user.userDetails?.email ?? 'admin@yourdomain.com',
@@ -584,7 +542,6 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
       });
     }
 
-    // Fetch all payments for this order
     const allPayments = await prisma.payment.findMany({
       where: { orderId: payment.orderId },
       orderBy: { createdAt: 'desc' }
@@ -605,12 +562,11 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// Get payment details for an order
-export const getPaymentDetails = async (req: AuthRequest, res: Response) => {
+export const getPaymentDetails = async (req: Request, res: Response) => {
   try {
     const { orderId } = req.params;
-    const userId = req.user.id;
-    const isAdmin = req.user.isAdmin;
+    const userId = req.user!.id;
+    const isAdmin = req.user!.isAdmin;
 
     const payments = await prisma.payment.findMany({
       where: { orderId },
@@ -630,7 +586,6 @@ export const getPaymentDetails = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'No payments found for this order' });
     }
 
-    // Check access permissions
     const order = payments[0].order;
     if (order.userId !== userId && !isAdmin) {
       return res.status(403).json({ error: 'Access denied' });

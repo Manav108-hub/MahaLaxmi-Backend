@@ -1,4 +1,3 @@
-// src/controllers/userController.ts
 import { Request, Response } from 'express';
 import { validationResult } from 'express-validator';
 import { PrismaClient } from '@prisma/client';
@@ -6,14 +5,10 @@ import { Parser } from 'json2csv';
 
 const prisma = new PrismaClient();
 
-interface AuthRequest extends Request {
-    user?: any;
-}
-
-export const getUserProfile = async (req: AuthRequest, res: Response) => {
+export const getUserProfile = async (req: Request, res: Response) => {
     try {
         const user = await prisma.user.findUnique({
-            where: { id: req.user.id },
+            where: { id: req.user!.id },
             select: {
                 id: true,
                 name: true,
@@ -35,7 +30,7 @@ export const getUserProfile = async (req: AuthRequest, res: Response) => {
     }
 };
 
-export const updateUserDetails = async (req: AuthRequest, res: Response) => {
+export const updateUserDetails = async (req: Request, res: Response) => {
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
@@ -43,9 +38,10 @@ export const updateUserDetails = async (req: AuthRequest, res: Response) => {
         }
 
         const { email, phone, address, city, state, pincode } = req.body;
+        const userId = req.user!.id;
 
         const userDetails = await prisma.userDetails.upsert({
-            where: { userId: req.user.id },
+            where: { userId },
             update: {
                 email,
                 phone,
@@ -55,7 +51,7 @@ export const updateUserDetails = async (req: AuthRequest, res: Response) => {
                 pincode
             },
             create: {
-                userId: req.user.id,
+                userId,
                 email,
                 phone,
                 address,
@@ -97,13 +93,7 @@ export const downloadUsersCSV = async (req: Request, res: Response) => {
             }
         });
 
-        // Flatten the data for CSV
-        const flattenedUsers = users.map((user: {
-            id: any; name: any; username: any; isAdmin: any; createdAt: any;
-            userDetails: {
-                email: any; phone: any; address: any; city: any; state: any; pincode: any;
-            } | null;
-        }) => ({
+        const flattenedUsers = users.map(user => ({
             id: user.id,
             name: user.name,
             username: user.username,
@@ -116,7 +106,6 @@ export const downloadUsersCSV = async (req: Request, res: Response) => {
             state: user.userDetails?.state || '',
             pincode: user.userDetails?.pincode || ''
         }));
-
 
         const fields = [
             'id', 'name', 'username', 'isAdmin', 'createdAt',

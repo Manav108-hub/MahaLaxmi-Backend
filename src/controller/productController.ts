@@ -1,4 +1,3 @@
-// src/controllers/productController.ts
 import { Request, Response } from 'express';
 import { validationResult } from 'express-validator';
 import { PrismaClient } from '@prisma/client';
@@ -6,7 +5,7 @@ import { s3Service } from '../services/s3Service';
 
 const prisma = new PrismaClient();
 
-export const createCategory = async (req: Request, res: Response): Promise<void> => {
+export const createCategory = async (req: Request, res: Response) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     res.status(400).json({ errors: errors.array() });
@@ -35,7 +34,7 @@ export const createCategory = async (req: Request, res: Response): Promise<void>
   }
 };
 
-export const getCategories = async (_req: Request, res: Response): Promise<void> => {
+export const getCategories = async (_req: Request, res: Response) => {
   try {
     const categories = await prisma.category.findMany({
       include: { _count: { select: { products: true } } },
@@ -48,7 +47,7 @@ export const getCategories = async (_req: Request, res: Response): Promise<void>
   }
 };
 
-export const createProduct = async (req: Request, res: Response): Promise<void> => {
+export const createProduct = async (req: Request, res: Response) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     res.status(400).json({ errors: errors.array() });
@@ -69,19 +68,16 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       features,
     } = req.body;
 
-    const files = req.files as Express.MulterS3.File[]; // uploaded via s3Service.uploadMiddleware()
+    const files = req.files as Express.MulterS3.File[];
 
-    // Verify category exists
     const category = await prisma.category.findUnique({ where: { id: categoryId } });
     if (!category) {
       res.status(400).json({ error: 'Category not found' });
       return;
     }
 
-    // Map S3 locations
-    const imageUrls = files ? files.map((f) => f.location) : [];
+    const imageUrls = files ? files.map(f => f.location) : [];
 
-    // Create product
     const product = await prisma.product.create({
       data: {
         name,
@@ -93,17 +89,18 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
       },
     });
 
-    // Optional details
     if (weight || dimensions || material || warranty || features) {
-      await prisma.productDetails.create({
-        data: {
-          productId: product.id,
-          weight,
-          dimensions,
-          material,
-          warranty,
-          features: features ? JSON.parse(features) : [],
-        },
+      const details: any = {};
+      if (weight) details.weight = weight;
+      if (dimensions) details.dimensions = dimensions;
+      if (material) details.material = material;
+      if (warranty) details.warranty = warranty;
+      if (features) details.features = JSON.parse(features);
+
+      await prisma.productDetails.upsert({
+        where: { productId: product.id },
+        update: details,
+        create: { productId: product.id, ...details },
       });
     }
 
@@ -122,7 +119,7 @@ export const createProduct = async (req: Request, res: Response): Promise<void> 
   }
 };
 
-export const getProducts = async (req: Request, res: Response): Promise<void> => {
+export const getProducts = async (req: Request, res: Response) => {
   try {
     const {
       page = '1',
@@ -182,7 +179,7 @@ export const getProducts = async (req: Request, res: Response): Promise<void> =>
   }
 };
 
-export const getProductById = async (req: Request, res: Response): Promise<void> => {
+export const getProductById = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
     const product = await prisma.product.findUnique({
@@ -202,7 +199,7 @@ export const getProductById = async (req: Request, res: Response): Promise<void>
   }
 };
 
-export const updateProduct = async (req: Request, res: Response): Promise<void> => {
+export const updateProduct = async (req: Request, res: Response) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     res.status(400).json({ errors: errors.array() });
@@ -227,7 +224,6 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
 
     const files = req.files as Express.MulterS3.File[];
 
-    // Fetch existing product & details
     const existing = await prisma.product.findUnique({
       where: { id },
       include: { productDetails: true },
@@ -237,18 +233,15 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Handle new images
     let images = existing.images;
     if (files && files.length > 0) {
-      // Delete old ones
       for (const url of existing.images) {
         const key = url.split('/').pop()!;
         await s3Service.deleteFile(`products/${key}`);
       }
-      images = files.map((f) => f.location);
+      images = files.map(f => f.location);
     }
 
-    // Build update data
     const data: any = {};
     if (name) data.name = name;
     if (description !== undefined) data.description = description;
@@ -258,10 +251,8 @@ export const updateProduct = async (req: Request, res: Response): Promise<void> 
     if (isActive !== undefined) data.isActive = isActive === 'true';
     if (images) data.images = images;
 
-    // Update product
     await prisma.product.update({ where: { id }, data });
 
-    // Update or create details
     if (weight || dimensions || material || warranty || features) {
       const details: any = {};
       if (weight) details.weight = weight;

@@ -1,15 +1,10 @@
-// src/controllers/cartController.ts
 import { Request, Response } from 'express';
 import { validationResult } from 'express-validator';
 import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
-interface AuthRequest extends Request {
-  user?: any;
-}
-
-export const addToCart = async (req: AuthRequest, res: Response) => {
+export const addToCart = async (req: Request, res: Response) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -17,9 +12,8 @@ export const addToCart = async (req: AuthRequest, res: Response) => {
     }
 
     const { productId, quantity } = req.body;
-    const userId = req.user.id;
+    const userId = req.user!.id;
 
-    // Check if product exists and is active
     const product = await prisma.product.findUnique({
       where: { id: productId }
     });
@@ -28,12 +22,10 @@ export const addToCart = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'Product not found' });
     }
 
-    // Check if product has enough stock
     if (product.stock < quantity) {
       return res.status(400).json({ error: 'Insufficient stock' });
     }
 
-    // Check if item already exists in cart
     const existingCartItem = await prisma.cart.findUnique({
       where: {
         userId_productId: {
@@ -45,7 +37,6 @@ export const addToCart = async (req: AuthRequest, res: Response) => {
 
     let cartItem;
     if (existingCartItem) {
-      // Update quantity
       const newQuantity = existingCartItem.quantity + quantity;
       
       if (product.stock < newQuantity) {
@@ -68,7 +59,6 @@ export const addToCart = async (req: AuthRequest, res: Response) => {
         }
       });
     } else {
-      // Create new cart item
       cartItem = await prisma.cart.create({
         data: {
           userId,
@@ -99,9 +89,9 @@ export const addToCart = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const getCart = async (req: AuthRequest, res: Response) => {
+export const getCart = async (req: Request, res: Response) => {
   try {
-    const userId = req.user.id;
+    const userId = req.user!.id;
 
     const cartItems = await prisma.cart.findMany({
       where: { userId },
@@ -120,12 +110,12 @@ export const getCart = async (req: AuthRequest, res: Response) => {
       orderBy: { createdAt: 'desc' }
     });
 
-    // Filter out inactive products
-    const activeCartItems = cartItems.filter((item: { product: { isActive: any; }; }) => item.product.isActive);
-
-    // Calculate totals
-    const totalItems = activeCartItems.reduce((sum: any, item: { quantity: any; }) => sum + item.quantity, 0);
-    const totalAmount = activeCartItems.reduce((sum: number, item: { product: { price: number; }; quantity: number; }) => sum + (item.product.price * item.quantity), 0);
+    const activeCartItems = cartItems.filter(item => item.product.isActive);
+    const totalItems = activeCartItems.reduce((sum, item) => sum + item.quantity, 0);
+    const totalAmount = activeCartItems.reduce(
+      (sum, item) => sum + (item.product.price * item.quantity), 
+      0
+    );
 
     res.json({
       cartItems: activeCartItems,
@@ -140,7 +130,7 @@ export const getCart = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const updateCartItem = async (req: AuthRequest, res: Response) => {
+export const updateCartItem = async (req: Request, res: Response) => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
@@ -149,9 +139,8 @@ export const updateCartItem = async (req: AuthRequest, res: Response) => {
 
     const { itemId } = req.params;
     const { quantity } = req.body;
-    const userId = req.user.id;
+    const userId = req.user!.id;
 
-    // Check if cart item exists and belongs to user
     const cartItem = await prisma.cart.findUnique({
       where: { id: itemId },
       include: { product: true }
@@ -161,7 +150,6 @@ export const updateCartItem = async (req: AuthRequest, res: Response) => {
       return res.status(404).json({ error: 'Cart item not found' });
     }
 
-    // Check if product has enough stock
     if (cartItem.product.stock < quantity) {
       return res.status(400).json({ error: 'Insufficient stock' });
     }
@@ -192,12 +180,11 @@ export const updateCartItem = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export const removeFromCart = async (req: AuthRequest, res: Response) => {
+export const removeFromCart = async (req: Request, res: Response) => {
   try {
     const { itemId } = req.params;
-    const userId = req.user.id;
+    const userId = req.user!.id;
 
-    // Check if cart item exists and belongs to user
     const cartItem = await prisma.cart.findUnique({
       where: { id: itemId }
     });
@@ -217,25 +204,31 @@ export const removeFromCart = async (req: AuthRequest, res: Response) => {
   }
 };
 
-// NEW: preview selected cart items
-export const getSelectedCartItems = async (req: AuthRequest, res: Response) => {
+export const getSelectedCartItems = async (req: Request, res: Response) => {
   const errors = validationResult(req);
-  if (!errors.isEmpty())
+  if (!errors.isEmpty()) {
     return res.status(400).json({ errors: errors.array() });
+  }
 
-  const { cartItemIds } = req.body;                                   // ADDED
-  const userId = req.user.id;
+  const { cartItemIds } = req.body;
+  const userId = req.user!.id;
 
   const items = await prisma.cart.findMany({
-    where: { userId, id: { in: cartItemIds } },                      // ADJUSTED filter
+    where: { userId, id: { in: cartItemIds } },
     include: {
       product: {
-        select: { id: true, name: true, price: true, images: true, stock: true, isActive: true }
+        select: { 
+          id: true, 
+          name: true, 
+          price: true, 
+          images: true, 
+          stock: true, 
+          isActive: true 
+        }
       }
     }
   });
 
-  // ADDED validations:
   if (items.length !== cartItemIds.length) {
     return res.status(400).json({ error: 'Some items not found in your cart' });
   }
@@ -254,16 +247,18 @@ export const getSelectedCartItems = async (req: AuthRequest, res: Response) => {
     });
   }
 
-  // CALCULATE totals
   const totalItems = items.reduce((sum, i) => sum + i.quantity, 0);
-  const totalAmount = items.reduce((sum, i) => sum + i.quantity * i.product.price, 0);
+  const totalAmount = items.reduce(
+    (sum, i) => sum + (i.quantity * i.product.price), 
+    0
+  );
 
   res.json({
     cartItems: items,
     summary: {
-      selectedItemsCount: items.length,                              // ADDED
-      totalItems,                                                    // ADDED
-      totalAmount: parseFloat(totalAmount.toFixed(2))               // ADDED
+      selectedItemsCount: items.length,
+      totalItems,
+      totalAmount: parseFloat(totalAmount.toFixed(2))
     }
   });
 };
