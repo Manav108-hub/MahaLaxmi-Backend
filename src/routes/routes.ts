@@ -117,7 +117,7 @@ router.post(
 
 router.get('/products', asyncHandler(getProducts));
 router.get('/product/:id', asyncHandler(getProductById));
-router.get('/api/products/slug/:slug', asyncHandler(getProductBySlug));
+router.get('/products/slug/:slug', asyncHandler(getProductBySlug));
 
 router.put(
   '/product/:id',
