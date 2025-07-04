@@ -89,6 +89,7 @@ export const addToCart = async (req: Request, res: Response) => {
   }
 };
 
+// @/controller/cartController.ts
 export const getCart = async (req: Request, res: Response) => {
   try {
     const userId = req.user!.id;
@@ -117,16 +118,21 @@ export const getCart = async (req: Request, res: Response) => {
       0
     );
 
+    // Return consistent response format
     res.json({
-      cartItems: activeCartItems,
-      summary: {
-        totalItems,
-        totalAmount: parseFloat(totalAmount.toFixed(2))
+      success: true,
+      data: {
+        items: activeCartItems,
+        total: parseFloat(totalAmount.toFixed(2)),
+        totalItems
       }
     });
   } catch (error) {
     console.error('Get cart error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 };
 

@@ -9,21 +9,26 @@ export const getUserProfile = async (req: Request, res: Response) => {
     try {
         const user = await prisma.user.findUnique({
             where: { id: req.user!.id },
-            select: {
-                id: true,
-                name: true,
-                username: true,
-                isAdmin: true,
-                createdAt: true,
-                userDetails: true
-            }
+            include: { userDetails: true }
         });
 
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        res.json({ user });
+        // Merge user and userDetails
+        const responseUser = {
+            ...user,
+            ...user.userDetails,
+            userDetails: undefined // Remove the nested object
+        };
+
+        res.json({ 
+            success: true,
+            data: {
+                user: responseUser
+            }
+        });
     } catch (error) {
         console.error('Get profile error:', error);
         res.status(500).json({ error: 'Internal server error' });
@@ -40,30 +45,35 @@ export const updateUserDetails = async (req: Request, res: Response) => {
         const { email, phone, address, city, state, pincode } = req.body;
         const userId = req.user!.id;
 
+        // Update or create user details
         const userDetails = await prisma.userDetails.upsert({
             where: { userId },
-            update: {
-                email,
-                phone,
-                address,
-                city,
-                state,
-                pincode
-            },
-            create: {
-                userId,
-                email,
-                phone,
-                address,
-                city,
-                state,
-                pincode
-            }
+            update: { email, phone, address, city, state, pincode },
+            create: { userId, email, phone, address, city, state, pincode }
         });
 
+        // Get the full updated user object
+        const user = await prisma.user.findUnique({
+            where: { id: userId },
+            include: { userDetails: true }
+        });
+
+        if (!user) {
+            return res.status(404).json({ error: 'User not found' });
+        }
+
+        // Merge user and userDetails into a single object
+        const responseUser = {
+            ...user,
+            ...user.userDetails,
+            userDetails: undefined // Remove the nested userDetails
+        };
+
         res.json({
-            message: 'User details updated successfully',
-            userDetails
+            success: true,
+            data: {
+                user: responseUser
+            }
         });
     } catch (error) {
         console.error('Update user details error:', error);
