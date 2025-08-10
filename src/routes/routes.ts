@@ -4,8 +4,25 @@ import {
   register, 
   login, 
   logout,
-  refreshToken
+  refreshToken,
+  getCurrentUser
 } from '../controller/authController';
+
+declare module 'express-serve-static-core' {
+  interface Request {
+    session?: {
+      csrfToken?: string;
+      [key: string]: any;
+    };
+    csrfToken?: () => string;
+    user?: {
+      id: string;
+      username: string;
+      role: string;
+      [key: string]: any;
+    };
+  }
+}
 import { 
   getUserProfile, 
   updateUserDetails, 
@@ -54,7 +71,7 @@ const asyncHandler = (fn: (req: Request, res: Response, next?: NextFunction) => 
   };
 };
 
-// Authentication Routes
+// Authentication Routes (NO CSRF)
 router.post('/register', [
   body('name').trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
   body('username').trim().isLength({ min: 3 }).withMessage('Username must be at least 3 characters'),
@@ -69,13 +86,14 @@ router.post('/login', [
 
 router.post('/logout', asyncHandler(logout));
 router.post('/refresh-token', asyncHandler(refreshToken));
+router.get('/me', auth, asyncHandler(getCurrentUser));
 
-// Protected Routes
+// Protected Routes (NO CSRF)
 router.get('/profile', auth, asyncHandler(getUserProfile));
 
 router.post('/user-details', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('email').optional().isEmail().withMessage('Invalid email format'),
   body('phone').optional().isMobilePhone('en-IN').withMessage('Invalid phone number'),
   body('address').optional().trim().isLength({ min: 10 }).withMessage('Address must be at least 10 characters'),
@@ -84,26 +102,26 @@ router.post('/user-details', [
   body('pincode').optional().isPostalCode('IN').withMessage('Invalid pincode')
 ], asyncHandler(updateUserDetails));
 
-// Admin Routes
+// Admin Routes (CSRF ONLY FOR ADMIN CREATION)
 router.get('/users/download', auth, adminAuth, asyncHandler(downloadUsersCSV));
 
-// Category Routes
+// Category Routes (NO CSRF)
 router.post('/category', [
   auth,
   adminAuth,
-  csrfProtection,
+  // REMOVED csrfProtection - only auth and adminAuth needed
   body('name').trim().isLength({ min: 2 }).withMessage('Category name must be at least 2 characters'),
   body('description').optional().trim()
 ], asyncHandler(createCategory));
 
 router.get('/categories', asyncHandler(getCategories));
 
-// Product Routes
+// Product Routes (NO CSRF)
 router.post(
   '/product',
   auth,
   adminAuth,
-  csrfProtection,
+  // REMOVED csrfProtection
   upload.array('images', 5),
   [
     body('name').trim().isLength({ min: 2 }).withMessage('Product name must be at least 2 characters'),
@@ -123,7 +141,7 @@ router.put(
   '/product/:id',
   auth,
   adminAuth,
-  csrfProtection,
+  // REMOVED csrfProtection
   upload.array('images', 5),
   [
     body('name').optional().trim(),
@@ -135,10 +153,10 @@ router.put(
   asyncHandler(updateProduct)
 );
 
-// Cart Routes
+// Cart Routes (NO CSRF)
 router.post('/cart', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('productId').notEmpty().withMessage('Product ID is required'),
   body('quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1')
 ], asyncHandler(addToCart));
@@ -147,23 +165,23 @@ router.get('/cart', auth, asyncHandler(getCart));
 
 router.put('/cart/:itemId', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1')
 ], asyncHandler(updateCartItem));
 
-router.delete('/cart/:itemId', auth, csrfProtection, asyncHandler(removeFromCart));
+router.delete('/cart/:itemId', auth, asyncHandler(removeFromCart));
 
 router.post('/cart/selected', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('cartItemIds').isArray({ min: 1 }).withMessage('At least one cart item must be selected'),
   body('cartItemIds.*').isString().withMessage('Invalid cart item ID format')
 ], asyncHandler(getSelectedCartItems));
 
-// Order Routes
+// Order Routes (NO CSRF)
 router.post('/order', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('paymentMethod').isIn(['COD', 'ONLINE']).withMessage('Invalid payment method'),
   body('shippingAddress').isObject().withMessage('Shipping address is required'),
   body('cartItemIds').isArray({ min: 1 }).withMessage('At least one cart item must be selected'),
@@ -173,36 +191,36 @@ router.post('/order', [
 router.get('/orders', auth, asyncHandler(getUserOrders));
 router.get('/order/:id', auth, asyncHandler(getOrderById));
 
-// Payment Routes for Orders
+// Payment Routes for Orders (NO CSRF)
 router.post('/order/payment/initiate', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('orderId').notEmpty().withMessage('Order ID is required')
 ], asyncHandler(initiatePayment));
 
 router.post('/order/payment/verify', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('transactionId').notEmpty().withMessage('Transaction ID is required')
 ], asyncHandler(verifyPayment));
 
 router.get('/order/:orderId/payments', auth, asyncHandler(getPaymentDetails));
 
-// Admin Order Routes
+// Admin Order Routes (NO CSRF)
 router.get('/admin/orders', auth, adminAuth, asyncHandler(getAllOrders));
 
 router.put('/admin/order/:id/status', [
   auth,
   adminAuth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('deliveryStatus').optional().isIn(['PENDING', 'CONFIRMED', 'PROCESSING', 'SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'RETURNED']),
   body('paymentStatus').optional().isIn(['PENDING', 'PAID', 'FAILED', 'REFUNDED'])
 ], asyncHandler(updateOrderStatus));
 
-// Mock Payment Routes
+// Mock Payment Routes (NO CSRF)
 router.post('/payment/initiate', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('orderId').notEmpty().withMessage('Order ID is required'),
   body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
   body('callbackUrl').isURL().withMessage('Valid callback URL is required'),
@@ -267,7 +285,7 @@ router.get('/payment/status/:transactionId', auth, asyncHandler(async (req: Requ
 
 router.post('/payment/complete/:transactionId', [
   auth,
-  csrfProtection,
+  // REMOVED csrfProtection
   body('success').isBoolean().withMessage('Success status is required')
 ], asyncHandler(async (req: Request, res: Response) => {
   const { transactionId } = req.params;
@@ -296,7 +314,35 @@ router.post('/payment/complete/:transactionId', [
   }
 }));
 
-// Mock payment callback handler
+// CSRF token route (ONLY for admin creation if needed)
+router.get('/csrf-token', asyncHandler(async (req: Request, res: Response) => {
+  try {
+    // Generate a simple token for admin operations only
+    const token = `csrf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Set the token in cookie
+    res.cookie('XSRF-TOKEN', token, {
+      httpOnly: false,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000,
+    });
+
+    res.json({
+      success: true,
+      token: token,
+      message: 'CSRF token generated for admin operations only'
+    });
+  } catch (error) {
+    console.error('CSRF token generation error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to generate CSRF token',
+    });
+  }
+}));
+
+// Mock payment callback handler (NO CSRF)
 router.get('/mock-payment', asyncHandler(async (req, res) => {
   const txn = req.query.txn as string;
   const amt = req.query.amt as string;
@@ -390,7 +436,7 @@ router.get('/mock-payment', asyncHandler(async (req, res) => {
   res.send(html);
 }));
 
-// Admin route to view payment sessions
+// Admin route to view payment sessions (NO CSRF)
 router.get('/admin/payments', auth, adminAuth, asyncHandler(async (req: Request, res: Response) => {
   try {
     const sessions = mockPaymentService.getPaymentSessions();

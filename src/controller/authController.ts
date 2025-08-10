@@ -3,15 +3,18 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import { validationResult } from 'express-validator';
 import { PrismaClient } from '@prisma/client';
-import { generateCsrfToken } from '../middleware/auth';
 
 const prisma = new PrismaClient();
 
-export const register = async (req: Request, res: Response) => {
+export const register = async (req: Request, res: Response): Promise<void> => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+      res.status(400).json({ 
+        success: false,
+        errors: errors.array() 
+      });
+      return;
     }
 
     const { name, username, password, adminToken } = req.body;
@@ -21,13 +24,21 @@ export const register = async (req: Request, res: Response) => {
     });
 
     if (existingUser) {
-      return res.status(400).json({ error: 'User already exists' });
+      res.status(400).json({ 
+        success: false,
+        error: 'User already exists' 
+      });
+      return;
     }
 
     let isAdmin = false;
     if (adminToken) {
       if (adminToken !== process.env.ADMIN_SECRET_TOKEN) {
-        return res.status(400).json({ error: 'Invalid admin token' });
+        res.status(400).json({ 
+          success: false,
+          error: 'Invalid admin token' 
+        });
+        return;
       }
       isAdmin = true;
     }
@@ -51,40 +62,54 @@ export const register = async (req: Request, res: Response) => {
       }
     });
 
-    const csrfToken = generateCsrfToken();
-    const token = jwt.sign(
+    // Generate JWT without CSRF token
+    const accessToken = jwt.sign(
       { 
         userId: user.id, 
         isAdmin: user.isAdmin,
-        csrfToken
+        username: user.username
       },
       process.env.JWT_SECRET!,
       { expiresIn: '7d' }
     );
 
-    res.cookie('token', token, {
+    // Set HTTP-only cookie for security
+    res.cookie('accessToken', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
     res.status(201).json({
+      success: true,
       message: 'User registered successfully',
-      user,
-      csrfToken
+      user: {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        isAdmin: user.isAdmin,
+        createdAt: user.createdAt
+      }
     });
   } catch (error) {
     console.error('Registration error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 };
 
-export const login = async (req: Request, res: Response) => {
+export const login = async (req: Request, res: Response): Promise<void> => {
   try {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ errors: errors.array() });
+      res.status(400).json({ 
+        success: false,
+        errors: errors.array() 
+      });
+      return;
     }
 
     const { username, password } = req.body;
@@ -94,85 +119,189 @@ export const login = async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      return res.status(400).json({ error: 'Invalid credentials' });
+      res.status(400).json({ 
+        success: false,
+        error: 'Invalid credentials' 
+      });
+      return;
     }
 
     const isValidPassword = await bcrypt.compare(password, user.password);
     if (!isValidPassword) {
-      return res.status(400).json({ error: 'Invalid credentials' });
+      res.status(400).json({ 
+        success: false,
+        error: 'Invalid credentials' 
+      });
+      return;
     }
 
-    const csrfToken = generateCsrfToken();
-    const token = jwt.sign(
+    // Generate JWT without CSRF token
+    const accessToken = jwt.sign(
       { 
         userId: user.id, 
         isAdmin: user.isAdmin,
-        csrfToken
+        username: user.username
       },
       process.env.JWT_SECRET!,
       { expiresIn: '7d' }
     );
 
-    res.cookie('token', token, {
+    // Set HTTP-only cookie for security
+    res.cookie('accessToken', accessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
     res.json({
+      success: true,
       message: 'Login successful',
       user: {
         id: user.id,
         name: user.name,
         username: user.username,
         isAdmin: user.isAdmin
-      },
-      csrfToken
+      }
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
   }
 };
 
 export const logout = async (req: Request, res: Response): Promise<void> => {
-  res.clearCookie('token');
-  res.json({ message: 'Logout successful' });
+  try {
+    // Clear the access token cookie
+    res.clearCookie('accessToken', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+    });
+
+    res.json({ 
+      success: true,
+      message: 'Logout successful' 
+    });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Internal server error' 
+    });
+  }
 };
 
 export const refreshToken = async (req: Request, res: Response): Promise<void> => {
-  const token = req.cookies.token;
+  const token = req.cookies.accessToken;
   
   if (!token) {
-    res.status(401).json({ error: 'Authentication required' });
+    res.status(401).json({ 
+      success: false,
+      error: 'Authentication required' 
+    });
     return;
   }
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET!) as any;
-    const csrfToken = generateCsrfToken();
     
-    const newToken = jwt.sign(
+    // Verify user still exists in database
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { id: true, username: true, isAdmin: true }
+    });
+
+    if (!user) {
+      res.clearCookie('accessToken');
+      res.status(401).json({ 
+        success: false,
+        error: 'User not found' 
+      });
+      return;
+    }
+
+    // Generate new JWT without CSRF token
+    const newAccessToken = jwt.sign(
       { 
-        userId: decoded.userId, 
-        isAdmin: decoded.isAdmin,
-        csrfToken
+        userId: user.id, 
+        isAdmin: user.isAdmin,
+        username: user.username
       },
       process.env.JWT_SECRET!,
       { expiresIn: '7d' }
     );
 
-    res.cookie('token', newToken, {
+    // Set new cookie
+    res.cookie('accessToken', newAccessToken, {
       httpOnly: true,
       secure: process.env.NODE_ENV === 'production',
       sameSite: 'lax',
-      maxAge: 7 * 24 * 60 * 60 * 1000,
+      maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
     });
 
-    res.json({ csrfToken });
+    res.json({ 
+      success: true,
+      message: 'Token refreshed successfully',
+      user: {
+        id: user.id,
+        username: user.username,
+        isAdmin: user.isAdmin
+      }
+    });
   } catch (err) {
-    res.clearCookie('token');
-    res.status(401).json({ error: 'Invalid token' });
+    console.error('Token refresh error:', err);
+    res.clearCookie('accessToken');
+    res.status(401).json({ 
+      success: false,
+      error: 'Invalid token' 
+    });
+  }
+};
+
+// Get current user info (useful for frontend)
+export const getCurrentUser = async (req: Request, res: Response): Promise<void> => {
+  try {
+    if (!req.user) {
+      res.status(401).json({
+        success: false,
+        error: 'Authentication required'
+      });
+      return;
+    }
+
+    // Fetch fresh user data from database
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        isAdmin: true,
+        createdAt: true
+      }
+    });
+
+    if (!user) {
+      res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+      return;
+    }
+
+    res.json({
+      success: true,
+      user
+    });
+  } catch (error) {
+    console.error('Get current user error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error'
+    });
   }
 };
