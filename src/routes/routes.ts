@@ -25,7 +25,12 @@ declare module 'express-serve-static-core' {
 }
 import { 
   getUserProfile, 
-  updateUserDetails, 
+  updateUserDetails,
+  getAllUsers,
+  getUserById,
+  updateUser,
+  deleteUser,
+  getUserStats,
   downloadUsersCSV 
 } from '../controller/userController';
 import { 
@@ -208,6 +213,21 @@ router.get('/order/:orderId/payments', auth, asyncHandler(getPaymentDetails));
 
 // Admin Order Routes (NO CSRF)
 router.get('/admin/orders', auth, adminAuth, asyncHandler(getAllOrders));
+// Admin User Management Routes
+router.get('/users', auth, adminAuth, asyncHandler(getAllUsers));
+router.get('/user/:id', auth, adminAuth, asyncHandler(getUserById));
+router.put('/user/:id', [
+  auth,
+  adminAuth,
+  body('name').optional().trim().isLength({ min: 2 }),
+  body('username').optional().trim().isLength({ min: 3 }),
+  body('email').optional().isEmail(),
+  body('phone').optional().isMobilePhone('en-IN'),
+  body('isAdmin').optional().isBoolean()
+], asyncHandler(updateUser));
+router.delete('/user/:id', auth, adminAuth, asyncHandler(deleteUser));
+router.get('/user/:id/stats', auth, adminAuth, asyncHandler(getUserStats));
+router.get('/users/download', auth, adminAuth, asyncHandler(downloadUsersCSV));
 
 router.put('/admin/order/:id/status', [
   auth,
