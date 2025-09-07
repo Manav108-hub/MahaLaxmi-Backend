@@ -1,3 +1,4 @@
+// routes/api.ts
 import express, { Request, Response, NextFunction } from 'express';
 import { body } from 'express-validator';
 import { 
@@ -19,10 +20,12 @@ declare module 'express-serve-static-core' {
       id: string;
       username: string;
       role: string;
+      isAdmin: boolean;
       [key: string]: any;
     };
   }
 }
+
 import { 
   getUserProfile, 
   updateUserDetails,
@@ -50,18 +53,16 @@ import {
   getSelectedCartItems   
 } from '../controller/cartController';
 import { 
-  createOrder, 
-  getOrderById, 
+  createPaymentSession,
+  handlePhonePeCallback,
+  verifyPaymentStatus,
   getUserOrders,
+  getOrderById,
   getAllOrders,
-  updateOrderStatus,
-  initiatePayment,
-  verifyPayment,
-  getPaymentDetails
+  updateOrderStatus
 } from '../controller/orderController';
-import { auth, adminAuth, csrfProtection } from '../middleware/auth';
+import { auth, adminAuth } from '../middleware/auth';
 import { upload } from '../config/s3';
-import { mockPaymentService } from '../services/paymentService';
 
 const router = express.Router();
 
@@ -76,7 +77,7 @@ const asyncHandler = (fn: (req: Request, res: Response, next?: NextFunction) => 
   };
 };
 
-// Authentication Routes (NO CSRF)
+// Authentication Routes
 router.post('/register', [
   body('name').trim().isLength({ min: 2 }).withMessage('Name must be at least 2 characters'),
   body('username').trim().isLength({ min: 3 }).withMessage('Username must be at least 3 characters'),
@@ -93,12 +94,11 @@ router.post('/logout', asyncHandler(logout));
 router.post('/refresh-token', asyncHandler(refreshToken));
 router.get('/me', auth, asyncHandler(getCurrentUser));
 
-// Protected Routes (NO CSRF)
+// User Profile Routes
 router.get('/profile', auth, asyncHandler(getUserProfile));
 
 router.post('/user-details', [
   auth,
-  // REMOVED csrfProtection
   body('email').optional().isEmail().withMessage('Invalid email format'),
   body('phone').optional().isMobilePhone('en-IN').withMessage('Invalid phone number'),
   body('address').optional().trim().isLength({ min: 10 }).withMessage('Address must be at least 10 characters'),
@@ -107,26 +107,21 @@ router.post('/user-details', [
   body('pincode').optional().isPostalCode('IN').withMessage('Invalid pincode')
 ], asyncHandler(updateUserDetails));
 
-// Admin Routes (CSRF ONLY FOR ADMIN CREATION)
-router.get('/users/download', auth, adminAuth, asyncHandler(downloadUsersCSV));
-
-// Category Routes (NO CSRF)
+// Category Routes
 router.post('/category', [
   auth,
   adminAuth,
-  // REMOVED csrfProtection - only auth and adminAuth needed
   body('name').trim().isLength({ min: 2 }).withMessage('Category name must be at least 2 characters'),
   body('description').optional().trim()
 ], asyncHandler(createCategory));
 
 router.get('/categories', asyncHandler(getCategories));
 
-// Product Routes (NO CSRF)
+// Product Routes
 router.post(
   '/product',
   auth,
   adminAuth,
-  // REMOVED csrfProtection
   upload.array('images', 5),
   [
     body('name').trim().isLength({ min: 2 }).withMessage('Product name must be at least 2 characters'),
@@ -146,7 +141,6 @@ router.put(
   '/product/:id',
   auth,
   adminAuth,
-  // REMOVED csrfProtection
   upload.array('images', 5),
   [
     body('name').optional().trim(),
@@ -158,10 +152,9 @@ router.put(
   asyncHandler(updateProduct)
 );
 
-// Cart Routes (NO CSRF)
+// Cart Routes
 router.post('/cart', [
   auth,
-  // REMOVED csrfProtection
   body('productId').notEmpty().withMessage('Product ID is required'),
   body('quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1')
 ], asyncHandler(addToCart));
@@ -170,7 +163,6 @@ router.get('/cart', auth, asyncHandler(getCart));
 
 router.put('/cart/:itemId', [
   auth,
-  // REMOVED csrfProtection
   body('quantity').isInt({ min: 1 }).withMessage('Quantity must be at least 1')
 ], asyncHandler(updateCartItem));
 
@@ -178,41 +170,38 @@ router.delete('/cart/:itemId', auth, asyncHandler(removeFromCart));
 
 router.post('/cart/selected', [
   auth,
-  // REMOVED csrfProtection
   body('cartItemIds').isArray({ min: 1 }).withMessage('At least one cart item must be selected'),
   body('cartItemIds.*').isString().withMessage('Invalid cart item ID format')
 ], asyncHandler(getSelectedCartItems));
 
-// Order Routes (NO CSRF)
-router.post('/order', [
+// NEW PAYMENT-FIRST ORDER FLOW
+// Step 1: Create payment session (replaces direct order creation)
+router.post('/payment/create-session', [
   auth,
-  // REMOVED csrfProtection
-  body('paymentMethod').isIn(['COD', 'ONLINE']).withMessage('Invalid payment method'),
   body('shippingAddress').isObject().withMessage('Shipping address is required'),
+  body('shippingAddress.name').trim().notEmpty().withMessage('Recipient name is required'),
+  body('shippingAddress.phone').isMobilePhone('en-IN').withMessage('Valid phone number is required'),
+  body('shippingAddress.address').trim().isLength({ min: 10 }).withMessage('Address must be at least 10 characters'),
+  body('shippingAddress.city').trim().notEmpty().withMessage('City is required'),
+  body('shippingAddress.state').trim().notEmpty().withMessage('State is required'),
+  body('shippingAddress.pincode').isPostalCode('IN').withMessage('Valid pincode is required'),
   body('cartItemIds').isArray({ min: 1 }).withMessage('At least one cart item must be selected'),
   body('cartItemIds.*').isString().withMessage('Invalid cart item ID format')
-], asyncHandler(createOrder));
+], asyncHandler(createPaymentSession));
 
+// Step 2: PhonePe callback handler (webhook)
+router.post('/payment/phonepe/callback', asyncHandler(handlePhonePeCallback));
+
+// Step 3: Verify payment status
+router.get('/payment/status/:transactionId', auth, asyncHandler(verifyPaymentStatus));
+
+// Order Routes (only for viewing orders after payment)
 router.get('/orders', auth, asyncHandler(getUserOrders));
 router.get('/order/:id', auth, asyncHandler(getOrderById));
 
-// Payment Routes for Orders (NO CSRF)
-router.post('/order/payment/initiate', [
-  auth,
-  // REMOVED csrfProtection
-  body('orderId').notEmpty().withMessage('Order ID is required')
-], asyncHandler(initiatePayment));
-
-router.post('/order/payment/verify', [
-  auth,
-  // REMOVED csrfProtection
-  body('transactionId').notEmpty().withMessage('Transaction ID is required')
-], asyncHandler(verifyPayment));
-
-router.get('/order/:orderId/payments', auth, asyncHandler(getPaymentDetails));
-
-// Admin Order Routes (NO CSRF)
+// Admin Order Routes
 router.get('/admin/orders', auth, adminAuth, asyncHandler(getAllOrders));
+
 // Admin User Management Routes
 router.get('/users', auth, adminAuth, asyncHandler(getAllUsers));
 router.get('/user/:id', auth, adminAuth, asyncHandler(getUserById));
@@ -232,245 +221,18 @@ router.get('/users/download', auth, adminAuth, asyncHandler(downloadUsersCSV));
 router.put('/admin/order/:id/status', [
   auth,
   adminAuth,
-  // REMOVED csrfProtection
   body('deliveryStatus').optional().isIn(['PENDING', 'CONFIRMED', 'PROCESSING', 'SHIPPED', 'OUT_FOR_DELIVERY', 'DELIVERED', 'CANCELLED', 'RETURNED']),
   body('paymentStatus').optional().isIn(['PENDING', 'PAID', 'FAILED', 'REFUNDED'])
 ], asyncHandler(updateOrderStatus));
 
-// Mock Payment Routes (NO CSRF)
-router.post('/payment/initiate', [
-  auth,
-  // REMOVED csrfProtection
-  body('orderId').notEmpty().withMessage('Order ID is required'),
-  body('amount').isFloat({ min: 0.01 }).withMessage('Amount must be greater than 0'),
-  body('callbackUrl').isURL().withMessage('Valid callback URL is required'),
-  body('mobileNumber').optional().isMobilePhone('en-IN').withMessage('Invalid mobile number')
-], asyncHandler(async (req: Request, res: Response) => {
-  const { orderId, amount, callbackUrl, mobileNumber } = req.body;
-  const userId = req.user!.id;
-
-  try {
-    const paymentRequest = {
-      merchantTransactionId: orderId,
-      merchantUserId: userId.toString(),
-      amount: parseFloat(amount),
-      callbackUrl,
-      mobileNumber
-    };
-
-    const paymentResponse = await mockPaymentService.initiatePayment(paymentRequest);
-
-    if (paymentResponse.success) {
-      res.status(200).json({
-        success: true,
-        message: 'Payment initiated successfully',
-        data: {
-          paymentUrl: paymentResponse.paymentUrl,
-          transactionId: paymentResponse.transactionId
-        }
-      });
-    } else {
-      res.status(400).json({
-        success: false,
-        message: paymentResponse.error || 'Payment initiation failed'
-      });
-    }
-  } catch (error) {
-    console.error('Payment initiation error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-}));
-
-router.get('/payment/status/:transactionId', auth, asyncHandler(async (req: Request, res: Response) => {
-  const { transactionId } = req.params;
-
-  try {
-    const paymentStatus = await mockPaymentService.checkPaymentStatus(transactionId);
-
-    res.status(200).json({
-      success: true,
-      data: paymentStatus
-    });
-  } catch (error) {
-    console.error('Payment status check error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-}));
-
-router.post('/payment/complete/:transactionId', [
-  auth,
-  // REMOVED csrfProtection
-  body('success').isBoolean().withMessage('Success status is required')
-], asyncHandler(async (req: Request, res: Response) => {
-  const { transactionId } = req.params;
-  const { success } = req.body;
-
-  try {
-    const completed = await mockPaymentService.completePayment(transactionId, success);
-
-    if (completed) {
-      res.status(200).json({
-        success: true,
-        message: `Payment ${success ? 'completed' : 'failed'} successfully`
-      });
-    } else {
-      res.status(404).json({
-        success: false,
-        message: 'Transaction not found'
-      });
-    }
-  } catch (error) {
-    console.error('Payment completion error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
-}));
-
-// CSRF token route (ONLY for admin creation if needed)
-router.get('/csrf-token', asyncHandler(async (req: Request, res: Response) => {
-  try {
-    // Generate a simple token for admin operations only
-    const token = `csrf-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    
-    // Set the token in cookie
-    res.cookie('XSRF-TOKEN', token, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 24 * 60 * 60 * 1000,
-    });
-
-    res.json({
-      success: true,
-      token: token,
-      message: 'CSRF token generated for admin operations only'
-    });
-  } catch (error) {
-    console.error('CSRF token generation error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Failed to generate CSRF token',
-    });
-  }
-}));
-
-// Mock payment callback handler (NO CSRF)
-router.get('/mock-payment', asyncHandler(async (req, res) => {
-  const txn = req.query.txn as string;
-  const amt = req.query.amt as string;
-  const callback = decodeURIComponent(req.query.callback as string);
-
-  if (!txn || !amt || !callback) {
-    return res.status(400).send('❌ Missing required parameters: txn, amt, callback');
-  }
-
-  // Basic XSS-safe sanitization (escape for HTML context)
-  const escapeHtml = (str: string) =>
-    str.replace(/[&<>'"]/g, tag => ({
-      '&': '&amp;',
-      '<': '&lt;',
-      '>': '&gt;',
-      "'": '&#39;',
-      '"': '&quot;',
-    }[tag] || tag));
-
-  const safeTxn = escapeHtml(txn);
-  const safeAmt = escapeHtml(amt);
-  const safeCallback = escapeHtml(callback);
-
-  const html = `
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-      <title>Mock Payment Gateway</title>
-      <style>
-        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f9f9f9; }
-        .payment-card {
-          max-width: 400px;
-          margin: 50px auto;
-          background: #fff;
-          padding: 30px;
-          border-radius: 10px;
-          box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-          text-align: center;
-        }
-        .amount { font-size: 2rem; margin: 20px 0; color: #2563eb; }
-        .txn { word-break: break-all; font-size: 0.9rem; color: #555; }
-        .buttons { display: flex; gap: 12px; margin-top: 20px; justify-content: center; }
-        button {
-          flex: 1;
-          padding: 12px 0;
-          border: none;
-          border-radius: 6px;
-          font-size: 1rem;
-          cursor: pointer;
-          transition: background 0.2s ease;
-        }
-        .success { background-color: #16a34a; color: #fff; }
-        .failure { background-color: #dc2626; color: #fff; }
-      </style>
-    </head>
-    <body>
-      <div class="payment-card">
-        <h2>Mock Payment Gateway</h2>
-        <p class="txn"><strong>Txn ID:</strong> ${safeTxn}</p>
-        <p><strong>Amount:</strong></p>
-        <div class="amount">₹${safeAmt}</div>
-        <div class="buttons">
-          <button class="success" onclick="completePayment(true)">Success</button>
-          <button class="failure" onclick="completePayment(false)">Failure</button>
-        </div>
-      </div>
-
-      <script>
-        async function completePayment(success) {
-          try {
-            const resp = await fetch('/api/payment/complete/${safeTxn}', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ success })
-            });
-            if (!resp.ok) throw new Error('Failed to complete payment');
-            const status = success ? 'SUCCESS' : 'FAILURE';
-            window.location.href = '${safeCallback}?status=' + status + '&txn=${safeTxn}';
-          } catch (err) {
-            alert('Error: ' + err.message);
-          }
-        }
-      </script>
-    </body>
-    </html>
-  `;
-
-  res.setHeader('Content-Type', 'text/html');
-  res.send(html);
-}));
-
-// Admin route to view payment sessions (NO CSRF)
-router.get('/admin/payments', auth, adminAuth, asyncHandler(async (req: Request, res: Response) => {
-  try {
-    const sessions = mockPaymentService.getPaymentSessions();
-    res.status(200).json({
-      success: true,
-      data: sessions
-    });
-  } catch (error) {
-    console.error('Get payment sessions error:', error);
-    res.status(500).json({
-      success: false,
-      message: 'Internal server error'
-    });
-  }
+// Health check endpoint
+router.get('/health', asyncHandler(async (req: Request, res: Response) => {
+  res.json({
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV,
+    paymentGateway: 'PhonePe'
+  });
 }));
 
 export default router;

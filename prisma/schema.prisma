@@ -16,10 +16,11 @@ model User {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
   
-  userDetails UserDetails?
-  cart        Cart[]
-  orders      Order[]
-  payments    Payment[]
+  userDetails     UserDetails?
+  cart            Cart[]
+  orders          Order[]
+  payments        Payment[]
+  paymentSessions PaymentSession[]
   
   @@map("users")
 }
@@ -106,21 +107,49 @@ model Cart {
   @@map("cart")
 }
 
+// NEW: PaymentSession model for pay-first flow
+model PaymentSession {
+  id                    String   @id @default(auto()) @map("_id") @db.ObjectId
+  transactionId         String   @unique // PhonePe merchant transaction ID
+  userId                String   @db.ObjectId
+  amount                Float
+  cartItemIds           String[] // Array of cart item IDs
+  shippingAddress       Json     // Shipping address object
+  status                PaymentSessionStatus @default(PENDING)
+  paymentUrl            String?  // PhonePe payment URL
+  phonePeTransactionId  String?  // PhonePe's internal transaction ID
+  phonePeResponse       Json?    // Full PhonePe initiation response
+  callbackData          Json?    // PhonePe callback data
+  statusCheckResponse   Json?    // Status check response
+  orderId               String?  @db.ObjectId // Created order ID after successful payment
+  expiresAt             DateTime // Payment session expiry (15 minutes)
+  createdAt             DateTime @default(now())
+  completedAt           DateTime?
+  
+  // Relations
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  order Order? @relation(fields: [orderId], references: [id])
+  
+  @@map("payment_sessions")
+}
+
+// Updated Order model - orders are only created after successful payment
 model Order {
   id              String        @id @default(auto()) @map("_id") @db.ObjectId
   userId          String        @db.ObjectId
   totalAmount     Float
-  paymentStatus   PaymentStatus @default(PENDING)
-  deliveryStatus  DeliveryStatus @default(PENDING)
-  paymentMethod   PaymentMethod
-  paymentId       String?
+  paymentStatus   PaymentStatus @default(PAID) // Always PAID since order created after payment
+  deliveryStatus  DeliveryStatus @default(CONFIRMED) // Start with CONFIRMED since payment is done
+  paymentMethod   PaymentMethod @default(ONLINE) // Only ONLINE payments now
+  paymentId       String?       // PhonePe transaction ID
   shippingAddress Json
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
   
-  user       User        @relation(fields: [userId], references: [id])
-  orderItems OrderItem[]
-  payments   Payment[]
+  user            User            @relation(fields: [userId], references: [id])
+  orderItems      OrderItem[]
+  payments        Payment[]
+  paymentSessions PaymentSession[] // Link to payment sessions
   
   @@map("orders")
 }
@@ -139,19 +168,20 @@ model OrderItem {
   @@map("order_items")
 }
 
+// Updated Payment model for PhonePe integration
 model Payment {
   id                    String        @id @default(auto()) @map("_id") @db.ObjectId
   orderId               String        @db.ObjectId
   userId                String        @db.ObjectId
-  transactionId         String        @unique // From mock payment service
-  merchantTransactionId String        // Order ID used as merchant transaction ID
+  transactionId         String        @unique // PhonePe transaction ID
+  merchantTransactionId String        // Our internal transaction ID
   amount                Float
   status                PaymentTransactionStatus @default(PENDING)
-  paymentMethod         String        @default("MOCK_GATEWAY")
+  paymentMethod         String        @default("PHONEPE")
   paymentUrl            String?
   callbackUrl           String?
   mobileNumber          String?
-  gatewayResponse       Json?         // Store any gateway response data
+  gatewayResponse       Json?         // Store PhonePe response data
   completedAt           DateTime?
   createdAt             DateTime      @default(now())
   updatedAt             DateTime      @updatedAt
@@ -160,6 +190,14 @@ model Payment {
   user  User  @relation(fields: [userId], references: [id])
   
   @@map("payments")
+}
+
+// Updated enums
+enum PaymentSessionStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  EXPIRED
 }
 
 enum PaymentStatus {
@@ -180,8 +218,8 @@ enum DeliveryStatus {
   RETURNED
 }
 
+// Updated to remove COD since we only support online payments now
 enum PaymentMethod {
-  COD
   ONLINE
 }
 
